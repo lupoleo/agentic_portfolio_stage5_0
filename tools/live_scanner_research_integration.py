@@ -11,7 +11,7 @@ from app.ai.company_assessment import CompanyAssessmentService
 from app.ai.canonical_technical import build_canonical_technical_input
 from app.ai.analyst_evidence_provider import YahooAnalystEvidenceProvider
 from app.ai.fundamental_evidence_provider import YahooFundamentalEvidenceProvider
-from app.ai.local_provider import LocalProvider
+from app.ai.provider_factory import build_provider
 from app.ai.market_evidence_provider import YahooMarketEvidenceProvider
 from app.ai.news_evidence_provider import YahooNewsEvidenceProvider
 from app.ai.opportunity_scoring_service import OpportunityScoringService
@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument("--watch-universe-report", type=Path, required=True)
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--model", default="qwen3:8b")
+    parser.add_argument("--model", default="claude-sonnet-5-5", help="claude-* model, or ollama:<model>")
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--cache-only", action="store_true")
@@ -57,9 +57,7 @@ def main() -> int:
         fundamental = analyst = None
         technical_loader = None
     else:
-        provider = LocalProvider(
-            model_name=args.model, timeout_seconds=args.timeout_seconds,
-        )
+        provider = build_provider(args.model, timeout_seconds=args.timeout_seconds)
         research_service = ResearchService(provider)
         scoring_service = OpportunityScoringService(
             provider,

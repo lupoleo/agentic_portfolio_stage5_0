@@ -92,7 +92,7 @@ def main() -> int:
     parser.add_argument("--opportunity-id")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--model", default="qwen3:8b")
+    parser.add_argument("--model", default="claude-sonnet-5-5", help="claude-* model, or ollama:<model>")
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--exposure-eur", type=float)

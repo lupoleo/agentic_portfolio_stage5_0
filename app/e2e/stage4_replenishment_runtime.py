@@ -34,6 +34,7 @@ from app.scanner.exchange_session_calendar import ExchangeSessionCalendarProvide
 from app.scanner.listing_start_reference import ListingStartReferenceRegistry
 from app.scanner.research_integration_store import ScannerResearchIntegrationStore
 from app.scanner.yahoo_history_snapshot import YahooHistorySnapshotProvider
+from app.ai.provider_factory import DEFAULT_MODEL
 from tools.live_scanner_history_quality import run_pilot
 
 
@@ -62,7 +63,7 @@ class Stage4ReplenishmentRuntimeConfiguration(Stage4Model):
         "data/cache/e2e/stage4/candidate_replenishment/children"
     )
     listing_references_path: str | None = None
-    model_name: str = "qwen3:8b"
+    model_name: str = DEFAULT_MODEL
     timeout_seconds: float = Field(default=600.0, gt=0)
     history_timeout_seconds: float = Field(default=20.0, gt=0)
     pause_seconds: float = Field(default=2.0, ge=0, le=30)
