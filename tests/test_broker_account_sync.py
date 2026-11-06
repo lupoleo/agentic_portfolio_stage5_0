@@ -305,3 +305,20 @@ def test_cio_adapter_marks_simulated_state(tmp_path):
 def test_cio_adapter_marks_real_state(tmp_path):
     service, _, _ = live_service(tmp_path, reading())
     assert account_state_from_version(service.sync().version).source is DataSource.IBKR
+
+
+def test_replaying_the_same_recorded_reading_is_a_new_sync_run(tmp_path):
+    from app.broker.account_sync import AccountSyncService
+    from app.broker.ibkr_client import ReadOnlyIbkrClient
+    from app.broker.recordings import RecordedTransport
+    from app.broker.sources import LiveIbkrAccountSource
+    from app.broker.sync_store import SyncStore
+
+    store = SyncStore(tmp_path / "s.db")
+    results = []
+    for _ in range(2):  # the same recording replayed by two tool runs
+        transport = RecordedTransport({k: [v] for k, v in reading(positions=[position()]).items()})
+        source = LiveIbkrAccountSource(ReadOnlyIbkrClient(transport), clock=lambda: T0)
+        results.append(AccountSyncService(source, store).sync())
+    assert results[0].sync_id != results[1].sync_id
+    assert results[1].version.version_id == results[0].version.version_id
