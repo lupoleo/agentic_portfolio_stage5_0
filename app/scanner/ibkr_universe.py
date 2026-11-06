@@ -289,6 +289,7 @@ def build_scanner_reports(
     history_duration: str = "1 Y",
     history_days: int = 370,
     max_listings: int | None = None,
+    max_candidates: int | None = None,
     exclude_conids: frozenset[int] = frozenset(),
     calendar_factory: CalendarFactory | None = None,
     progress: Callable[[str], None] | None = None,
@@ -296,6 +297,10 @@ def build_scanner_reports(
     """Eligibility, mapping and history-quality reports for the acquired universe.
 
     ``max_listings`` bounds the Gateway calls (best scanner rank first);
+    ``max_candidates`` stops once that many listings reach the STANDARD
+    history route, so research spends its budget on the best-ranked names;
+    listings on a venue without a session calendar (e.g. FWB secondary
+    listings) are skipped before any history call;
     ``exclude_conids`` skips instruments already held (they are watched as
     positions, not admitted as new candidates).
     """
@@ -309,12 +314,32 @@ def build_scanner_reports(
 
     decisions, mappings, results, refs = [], [], [], []
     counts: dict[str, int] = {}
-    entries = []
 
     def bump(key: str) -> None:
         counts[key] = counts.get(key, 0) + 1
 
-    for item in selected:
+    fx_cache: dict[str, tuple[SessionFXRate, ...]] = {}
+    fx_errors: dict[str, str] = {}
+    standard = 0
+    stopped_at = None
+
+    def fx_for(currency: str) -> tuple[SessionFXRate, ...]:
+        if currency == "EUR":
+            return ()
+        ccy = "GBP" if currency in {"GBX", "GBP"} else currency
+        if ccy not in fx_cache:
+            try:
+                fx_cache[ccy] = tuple(fx_rates_from_bars(
+                    ccy, session.fx_daily_history(ccy, duration=history_duration), known_at=as_of))
+            except (BrokerClientError, BrokerNoDataError) as exc:
+                fx_cache[ccy] = ()
+                fx_errors[ccy] = f"{type(exc).__name__}: {exc}"  # liquidity stays UNDETERMINED
+        return fx_cache[ccy]
+
+    for index, item in enumerate(selected):
+        if max_candidates is not None and standard >= max_candidates:
+            stopped_at = index
+            break
         try:
             info = session.contract_info(item.conid)
         except (BrokerClientError, BrokerNoDataError) as exc:
@@ -324,6 +349,10 @@ def build_scanner_reports(
             continue
         exchange = (info.primary_exchange or item.exchange).upper()
         currency = (info.currency or item.currency).upper()
+        calendar = calendar_factory(exchange, start, as_of.date())
+        if calendar is None:
+            bump(f"unsupported_venue:{exchange}")
+            continue
         raw_type = STOCK_TYPE_MAP.get(info.stock_type.strip().upper()) if info.stock_type else None
         listing = MarketListing(info.symbol or item.symbol, exchange, exchange, _region(exchange), currency=currency,
                                 instrument_type=raw_type or (info.stock_type or None), name=info.long_name or None)
@@ -354,34 +383,21 @@ def build_scanner_reports(
         except (BrokerClientError, BrokerNoDataError) as exc:
             error = f"{type(exc).__name__}: {exc}"
         verification = _verification(mapping, info, bars, error, checked_at=as_of, start=start)
-        entries.append((listing, symbol, info, bars, verification))
         refs.append(InstrumentRef(ticker=symbol, conid=info.conid, exchange="SMART", asset_kind="STK",
                                   currency=currency))
-
-    fx_rates: list[SessionFXRate] = []
-    fx_errors = {}
-    for currency in sorted({e[0].currency for e in entries if e[3]} - {"EUR"}):
-        ccy = "GBP" if currency in {"GBX", "GBP"} else currency
-        try:
-            fx_rates.extend(fx_rates_from_bars(ccy, session.fx_daily_history(ccy, duration=history_duration),
-                                               known_at=as_of))
-        except (BrokerClientError, BrokerNoDataError) as exc:
-            fx_errors[ccy] = f"{type(exc).__name__}: {exc}"  # liquidity stays UNDETERMINED for this currency
-
-    for listing, symbol, info, bars, verification in entries:
         record = {"listing_key": asdict(listing.key), "research_symbol": symbol, "ibkr_conid": info.conid,
                   "acquisition": {"verification": _verification_dict(verification)}, "quality": None}
         if bars:
             snapshot = _bars_to_snapshot(listing, symbol, bars, fetched_at=as_of, start=start,
                                          currency=listing.currency)
-            calendar = calendar_factory(listing.exchange, start, as_of.date())
             quality = evaluate_history_quality(
                 snapshot=snapshot, verification=verification, as_of=as_of, calendar=calendar,
-                fx_rates=tuple(r for r in fx_rates
-                               if r.currency == ("GBP" if listing.currency in {"GBX", "GBP"} else listing.currency)),
+                fx_rates=fx_for(listing.currency),
             )
             record["quality"] = history_quality_result_to_dict(quality)
             bump(f"history_route:{quality.route.value}")
+            if quality.route.value == "STANDARD":
+                standard += 1
             if progress:
                 gates = ",".join(f"{g.name}={g.status.value}" for g in quality.gates if g.status.value != "PASS")
                 progress(f"{symbol}: {quality.route.value}" + (f" ({gates})" if gates else ""))
@@ -390,6 +406,7 @@ def build_scanner_reports(
             if progress:
                 progress(f"{symbol}: no history ({verification.diagnostics[0].message})")
         results.append(record)
+    fx_rates = [rate for rates in fx_cache.values() for rate in rates]
 
     eligibility = {"audit_id": "E2E-S2.2B", "source": "ibkr-scanner", "all_decisions": decisions,
                    "decision_count": len(decisions)}
@@ -407,7 +424,9 @@ def build_scanner_reports(
                    "error": s.error} for s in acquisition.scans],
         "distinct_listings": len(acquisition.listings),
         "excluded_held": sum(1 for item in acquisition.listings if item.conid in exclude_conids),
-        "evaluated_listings": len(selected),
+        "evaluated_listings": len(selected) if stopped_at is None else stopped_at,
+        "standard_candidates": standard,
+        "stopped_at_max_candidates": stopped_at is not None,
         "counts": dict(sorted(counts.items())),
         "fx_currencies": sorted({r.currency for r in fx_rates}),
         "fx_errors": fx_errors,

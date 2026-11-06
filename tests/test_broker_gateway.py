@@ -137,3 +137,17 @@ def test_session_exposes_no_order_methods():
     public = {n for n in dir(IbAsyncGatewaySession) if not n.startswith("_")}
     assert public == {"close", "contract_info", "daily_history", "news_providers", "headlines",
                       "scanner", "fx_daily_history"}  # read-only market scanners and FX bars (S5.0-5)
+
+
+def test_scanner_cancel_acknowledgements_are_not_logged():
+    import logging
+
+    from app.broker.gateway import _ScannerCancelFilter
+
+    def record(message):
+        return logging.LogRecord("ib_async.wrapper", logging.ERROR, __file__, 1, message, None, None)
+
+    f = _ScannerCancelFilter()
+    assert not f.filter(record("Error 162, reqId 41: Historical Market Data Service error message:"
+                               "API scanner subscription cancelled: 41"))
+    assert f.filter(record("Error 162, reqId 7: Historical Market Data Service error message:No market data permissions"))

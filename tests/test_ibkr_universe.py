@@ -168,3 +168,24 @@ def test_recorded_session_replays_scans_and_fx():
     assert session.fx_daily_history("usd")[0].close == 1.1
     with pytest.raises(BrokerNoDataError):
         session.scanner("STK", "STK.US.MAJOR", "TOP_PERC_GAIN")
+
+
+def test_max_candidates_stops_after_enough_standard_routes():
+    session = FakeSession()
+    acquisition = acquire_universe(session, PLAN, now=AS_OF)
+    reports = build_scanner_reports(session, acquisition, as_of=AS_OF, max_candidates=1)
+    assert session.history_calls == [1]  # AAA is STANDARD: SAP and the rest are not evaluated
+    assert reports.summary["standard_candidates"] == 1 and reports.summary["stopped_at_max_candidates"]
+    assert [row["symbol"] for row in reports.eligibility["all_decisions"]] == ["AAA"]
+
+
+def test_venue_without_calendar_is_skipped_before_history():
+    session = FakeSession()
+    INFOS_FWB = dict(INFOS)
+    INFOS_FWB[3] = ContractInfo(3, "SAP", "SMART", "FWB2", "EUR", "SAP SE", "STK", "COMMON")
+    session.contract_info = lambda conid, exchange="": INFOS_FWB[conid]
+    acquisition = acquire_universe(session, PLAN, now=AS_OF)
+    reports = build_scanner_reports(session, acquisition, as_of=AS_OF)
+    assert 3 not in session.history_calls
+    assert reports.summary["counts"]["unsupported_venue:FWB2"] == 1
+    assert "SAP" not in {row["symbol"] for row in reports.eligibility["all_decisions"]}

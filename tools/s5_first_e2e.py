@@ -95,7 +95,7 @@ def merge_scanner_refs(directory, refs) -> list[str]:
     return skipped
 
 
-def run_scanner(session, version, output: Path, *, as_of, max_listings):
+def run_scanner(session, version, output: Path, *, as_of, max_listings, max_candidates):
     held = frozenset(p.conid for p in version.reading.positions if getattr(p, "conid", None))
     acquisition = acquire_universe(session, DEFAULT_PLAN, now=as_of)
     failed = [s for s in acquisition.scans if s.error]
@@ -104,7 +104,7 @@ def run_scanner(session, version, output: Path, *, as_of, max_listings):
     for scan in failed:
         print(f"  scan {scan.query.location} {scan.query.scan_code}: {scan.error}")
     reports = build_scanner_reports(session, acquisition, as_of=as_of, max_listings=max_listings,
-                                    exclude_conids=held, progress=lambda line: print("  " + line))
+                                    max_candidates=max_candidates, exclude_conids=held, progress=lambda line: print("  " + line))
     paths = reports.write(output)
     print("scanner_counts:", reports.summary["counts"])
     if reports.summary["fx_errors"]:
@@ -128,7 +128,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-only", action="store_true", help="no Gateway/Yahoo/model calls in research")
     parser.add_argument("--no-scanner", action="store_true", help="holdings-only watch universe")
     parser.add_argument("--scanner-max-listings", type=int, default=60,
-                        help="distinct scanner listings evaluated (each costs Gateway calls)")
+                        help="distinct scanner listings evaluated at most (each costs Gateway calls)")
+    parser.add_argument("--scanner-candidates", type=int,
+                        help="stop after this many STANDARD candidates, best scanner rank first "
+                             "(default: half of --max-hypotheses, one long and one short hypothesis each)")
     args = parser.parse_args(argv)
 
     now = datetime.now(timezone.utc)
@@ -160,17 +163,18 @@ def main(argv: list[str] | None = None) -> int:
 
         directory = directory_from_version(version)
         scanner = None
+        max_hypotheses = args.max_hypotheses
         if args.no_scanner:
             reports = write_scanner_placeholders(args.output_directory / "scanner_placeholder")
         else:
+            if max_hypotheses is None:
+                max_hypotheses = DEFAULT_SCANNER_MAX_HYPOTHESES
+            candidates = args.scanner_candidates or max(1, max_hypotheses // 2)
             scanner, reports = run_scanner(session, version, args.output_directory / "scanner", as_of=now,
-                                           max_listings=args.scanner_max_listings)
+                                           max_listings=args.scanner_max_listings, max_candidates=candidates)
             skipped = merge_scanner_refs(directory, scanner.instrument_refs)
             if skipped:
                 print("scanner tickers already bound to another conid:", skipped)
-        max_hypotheses = args.max_hypotheses
-        if max_hypotheses is None and scanner is not None:
-            max_hypotheses = DEFAULT_SCANNER_MAX_HYPOTHESES
         configuration = Stage4RuntimeConfiguration(
             database_path=str(args.db),
             portfolio_snapshot_id=analysis.snapshot.snapshot_id,
