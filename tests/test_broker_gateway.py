@@ -57,6 +57,9 @@ class FakeSession:
             raise answer
         return answer
 
+    def news_article(self, provider_code, article_id):
+        raise BrokerNoDataError(f"article {article_id}: not recorded")
+
 
 def test_held_listing_history_is_used_when_permitted():
     result = history_with_listing_fallback(FakeSession(), 211008268, "BVME")
@@ -136,7 +139,7 @@ def test_session_exposes_no_order_methods():
 
     public = {n for n in dir(IbAsyncGatewaySession) if not n.startswith("_")}
     assert public == {"close", "contract_info", "daily_history", "news_providers", "headlines",
-                      "scanner", "fx_daily_history", "resolve_stock"}  # read-only market scanners and FX bars (S5.0-5)
+                      "scanner", "fx_daily_history", "resolve_stock", "news_article"}  # read-only market scanners and FX bars (S5.0-5)
 
 
 def test_scanner_cancel_acknowledgements_are_not_logged():
