@@ -7,7 +7,8 @@ Two independent locks keep it read-only:
 
 * the Gateway's own "Read-Only API" setting refuses any order on the server;
 * this session always connects with ``readonly=True`` and exposes only data
-  requests (contract details, daily history, news). There is no method that
+  requests (contract details, daily history, FX history, market scanners,
+  news). There is no method that
   could place, modify or cancel anything.
 
 ``ib_async`` is imported lazily so offline tests and CI never need it.
@@ -51,6 +52,16 @@ class ContractInfo:
     currency: str
     long_name: str
     sec_type: str
+    stock_type: str = ""  # IBKR ContractDetails.stockType: COMMON, ETF, ADR, REIT, PREFERRED, ...
+
+
+@dataclass(frozen=True)
+class ScannerRow:
+    rank: int
+    conid: int
+    symbol: str
+    exchange: str  # primary listing exchange
+    currency: str
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,17 @@ class GatewaySession(Protocol):
     def news_providers(self) -> list[str]: ...
 
     def headlines(self, conid: int, provider_codes: list[str], *, limit: int = 20) -> list[Headline]: ...
+
+    def scanner(self, instrument: str, location: str, scan_code: str, *, rows: int = 50,
+                market_cap_above_musd: float | None = None) -> list[ScannerRow]: ...
+
+    def fx_daily_history(self, currency: str, *, duration: str = "1 Y") -> list[DailyBar]:
+        """Daily EUR.<currency> mid bars: close = units of ``currency`` per 1 EUR."""
+        ...
+
+
+def scan_key(instrument: str, location: str, scan_code: str) -> str:
+    return f"{instrument}|{location}|{scan_code}"
 
 
 def clean_headline(text: str) -> str:
@@ -127,6 +149,7 @@ class IbAsyncGatewaySession:
         return ContractInfo(
             conid=c.conId, symbol=c.symbol, exchange=c.exchange, primary_exchange=c.primaryExchange or c.exchange,
             currency=c.currency, long_name=d.longName or "", sec_type=c.secType,
+            stock_type=getattr(d, "stockType", "") or "",
         )
 
     def daily_history(self, conid: int, exchange: str, *, duration: str = "1 Y") -> list[DailyBar]:
@@ -140,6 +163,47 @@ class IbAsyncGatewaySession:
             raise BrokerNoDataError(f"history {conid}@{exchange}: no bars")
         return [DailyBar(b.date if isinstance(b.date, date) and not isinstance(b.date, datetime) else b.date.date(),
                          b.open, b.high, b.low, b.close, b.volume) for b in bars]
+
+    def fx_daily_history(self, currency: str, *, duration: str = "1 Y") -> list[DailyBar]:
+        from ib_async import Contract
+
+        self._errors.clear()
+        contract = Contract(secType="CASH", symbol="EUR", currency=currency.upper(), exchange="IDEALPRO")
+        bars = self._ib.reqHistoricalData(
+            contract, endDateTime="", durationStr=duration, barSizeSetting="1 day",
+            whatToShow="MIDPOINT", useRTH=False, formatDate=2, timeout=60,
+        )
+        if not bars:
+            self._raise_last_error(f"fx EUR.{currency}")
+            raise BrokerNoDataError(f"fx EUR.{currency}: no bars")
+        return [DailyBar(b.date if isinstance(b.date, date) and not isinstance(b.date, datetime) else b.date.date(),
+                         b.open, b.high, b.low, b.close, 0.0) for b in bars]
+
+    def scanner(self, instrument: str, location: str, scan_code: str, *, rows: int = 50,
+                market_cap_above_musd: float | None = None) -> list[ScannerRow]:
+        from ib_async import ScannerSubscription
+
+        self._errors.clear()
+        sub = ScannerSubscription(instrument=instrument, locationCode=location, scanCode=scan_code,
+                                  numberOfRows=rows)
+        if market_cap_above_musd is not None:
+            sub.marketCapAbove = market_cap_above_musd
+        data = self._ib.reqScannerData(sub)
+        self._ib.sleep(0.5)  # let the Gateway settle the cancel (benign error 162) before the next scan
+        if not data:
+            errors = [e for e in self._errors.values() if "scanner subscription cancelled" not in e[1].lower()]
+            self._errors.clear()
+            if errors:
+                code, message = errors[-1]
+                raise BrokerClientError(f"scanner {location} {scan_code}: IB error {code}: {message}")
+            return []
+        self._errors.clear()
+        out = []
+        for r in data:
+            c = r.contractDetails.contract
+            out.append(ScannerRow(rank=r.rank, conid=c.conId, symbol=c.symbol,
+                                  exchange=c.primaryExchange or c.exchange, currency=c.currency))
+        return out
 
     def news_providers(self) -> list[str]:
         return [p.code for p in self._ib.reqNewsProviders()]
@@ -213,6 +277,8 @@ class RecordedGatewaySession:
         data = json.loads(Path(recording).read_text(encoding="utf-8")) if isinstance(recording, str) else recording
         self._providers = list(data.get("news_providers") or [])
         self._instruments = {int(k): v for k, v in (data.get("instruments") or {}).items()}
+        self._scans = dict(data.get("scans") or {})
+        self._fx = dict(data.get("fx") or {})
 
     def _entry(self, conid: int) -> dict:
         entry = self._instruments.get(conid)
@@ -246,3 +312,18 @@ class RecordedGatewaySession:
             Headline(datetime.fromisoformat(h["published_at"]), h["provider_code"], h["article_id"], h["headline"])
             for h in (entry.get("headlines") or [])[:limit]
         ]
+
+    def scanner(self, instrument: str, location: str, scan_code: str, *, rows: int = 50,
+                market_cap_above_musd: float | None = None) -> list[ScannerRow]:
+        entry = self._scans.get(scan_key(instrument, location, scan_code))
+        if entry is None:
+            raise BrokerNoDataError(f"scan {location} {scan_code} not in recording")
+        if isinstance(entry, dict) and "error" in entry:
+            raise BrokerClientError(entry["error"])
+        return [ScannerRow(**row) for row in entry][:rows]
+
+    def fx_daily_history(self, currency: str, *, duration: str = "1 Y") -> list[DailyBar]:
+        bars = self._fx.get(currency.upper())
+        if not bars:
+            raise BrokerNoDataError(f"fx EUR.{currency} not in recording")
+        return [DailyBar(date.fromisoformat(b["day"]), b["open"], b["high"], b["low"], b["close"], 0.0) for b in bars]

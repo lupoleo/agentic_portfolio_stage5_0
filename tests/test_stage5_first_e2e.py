@@ -97,3 +97,58 @@ def test_positions_are_valued_in_eur_with_ibkr_fx(tmp_path):
         "metrics": version.reading.metrics.model_copy(update={"base_currency": "USD"})})})
     with pytest.raises(Stage5PortfolioError):
         positions_from_version(usd_base)
+
+
+def test_scanner_candidates_join_the_watch_universe(tmp_path, capsys):
+    from datetime import datetime, timezone
+
+    from app.broker.gateway import scan_key
+    from app.scanner.exchange_session_calendar import ExchangeSessionCalendarProvider
+
+    gateway, account, fixture = write_inputs(tmp_path)
+    data = json.loads(gateway.read_text(encoding="utf-8"))
+    today = datetime.now(timezone.utc).date()
+    calendar = ExchangeSessionCalendarProvider().build("NASDAQ", start=today - timedelta(days=400), end=today).calendar
+    now = datetime.now(timezone.utc)
+    sessions = [s.session for s in calendar.sessions if s.closes_at <= now]
+    data["instruments"]["2001"] = {
+        "contract": {"conid": 2001, "symbol": "NEWC", "exchange": "SMART", "primary_exchange": "NASDAQ",
+                     "currency": "USD", "long_name": "New Candidate Inc", "sec_type": "STK", "stock_type": "COMMON"},
+        "bars": [{"day": d.isoformat(), "open": 50, "high": 51, "low": 49, "close": 50, "volume": 500_000}
+                 for d in sessions],
+        "headlines": [],
+    }
+    data["scans"] = {
+        scan_key("STK", "STK.US.MAJOR", "MOST_ACTIVE"): [
+            {"rank": 0, "conid": 2001, "symbol": "NEWC", "exchange": "NASDAQ", "currency": "USD"},
+            {"rank": 1, "conid": 1001, "symbol": "AAA", "exchange": "NASDAQ", "currency": "USD"},  # held
+        ],
+    }
+    day, fx = today - timedelta(days=400), []
+    while day <= today:
+        if day.weekday() < 5:
+            fx.append({"day": day.isoformat(), "open": 1.1, "high": 1.1, "low": 1.1, "close": 1.1})
+        day += timedelta(days=1)
+    data["fx"] = {"USD": fx}
+    gateway.write_text(json.dumps(data), encoding="utf-8")
+
+    code = s5_first_e2e.main([
+        "--gateway-recording", str(gateway), "--account-recording", str(account), "--fixture", str(fixture),
+        "--db", str(tmp_path / "cio.db"), "--sync-db", str(tmp_path / "sync.db"),
+        "--output-directory", str(tmp_path / "out"), "--cache-only",
+    ])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "listings=2" in out and "NEWC: STANDARD" in out
+    assert "WATCH_UNIVERSE_ASSEMBLY" in out and "CACHE_ONLY_MISS" in out  # research reached, model calls off
+    (watch_path,) = (tmp_path / "out" / "watch_universe").glob("*.json")
+    members = json.loads(watch_path.read_text(encoding="utf-8"))["universe"]["members"]
+    assert {m["yahoo_symbols"][0]: m["provenances"] for m in members} == {
+        "AAA": ["CURRENT_POSITION"], "BBB": ["CURRENT_POSITION"], "CCC": ["CURRENT_POSITION"],
+        "NEWC": ["NEW_CANDIDATE"]}
+    (report_path,) = (tmp_path / "out").glob("stage5_first_e2e_*.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["scanner"]["excluded_held"] == 1 and report["scanner"]["evaluated_listings"] == 1
+    assert report["configuration"]["max_hypotheses"] == 10
+    for counter in ("broker_orders_submitted", "portfolio_mutations", "automatic_executions"):
+        assert f"{counter}: 0" in out

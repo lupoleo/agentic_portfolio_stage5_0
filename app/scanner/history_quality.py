@@ -16,6 +16,10 @@ from app.scanner.history_quality_contracts import (
 )
 
 
+# 4.0 Yahoo history, or 5.0 IB Gateway history keyed by conid (S5.0-5).
+MARKET_DATA_PROVIDERS = frozenset({"yahoo", "ibkr"})
+
+
 def _canonical(value):
     if isinstance(value, timedelta):
         return value.total_seconds()
@@ -63,7 +67,7 @@ def evaluate_history_quality(*, snapshot, verification, as_of, calendar=None,
     if (snapshot.listing_key != mapping.listing_key
             or snapshot.yahoo_symbol != mapping.resolved_symbol
             or snapshot.mapping_version != mapping.mapping_version
-            or mapping.provider_id != "yahoo"):
+            or mapping.provider_id not in MARKET_DATA_PROVIDERS):
         raise ValueError("Snapshot and verified mapping identities differ")
     if listing_start is not None and listing_start.listing_key != snapshot.listing_key:
         raise ValueError("Listing-start evidence belongs to another listing")
@@ -180,9 +184,9 @@ def evaluate_history_quality(*, snapshot, verification, as_of, calendar=None,
          "STANDARD_HISTORY_LENGTH" if len(good) >= policy.min_standard_sessions else
          "VERIFIED_RECENT_LISTING" if recent_proven else "SHORT_HISTORY_UNVERIFIED")
 
-    # Currency is bound to the Yahoo metadata, not guessed from a ticker suffix.
+    # Currency is bound to the provider metadata, not guessed from a ticker suffix.
     unit = "GBX" if snapshot.price_unit in {"GBp", "GBX"} else snapshot.price_unit.upper()
-    observed = dict(verification.identity_evidence).get("yahoo.currency")
+    observed = dict(verification.identity_evidence).get(f"{mapping.provider_id}.currency")
     observed = "GBX" if observed in {"GBp", "GBX"} else observed.upper() if observed else None
     unit_ok = observed == unit
     gate("price_unit", S.UNDETERMINED if observed is None else S.PASS if unit_ok else S.FAIL,
