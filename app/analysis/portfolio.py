@@ -172,12 +172,35 @@ def analyze_portfolio(
         AnalyzedPosition
     """
 
-    # ---------------------------------------------------------
-    # 1. Load Fineco portfolio
-    # ---------------------------------------------------------
+    return analyze_positions(
+        load_fineco_positions(
+            file_path
+        )
+    )
 
-    positions = load_fineco_positions(
-        file_path
+
+def analyze_positions(
+    positions: list[PortfolioPosition],
+    market_data_loader=None,
+) -> list[AnalyzedPosition]:
+    """
+    Analyze already-loaded positions (Stage 5: positions come from the IBKR
+    account state, not from a file).
+
+    ``market_data_loader(symbols) -> {symbol: DataFrame}`` defaults to the
+    Yahoo batch download; Stage 5 passes IBKR daily history.
+    """
+
+    if market_data_loader is None:
+
+        def market_data_loader(symbols):
+            return download_price_history(
+                symbols,
+                period=MARKET_DATA_DOWNLOAD_PERIOD,
+            )
+
+    positions = list(
+        positions
     )
 
     if not positions:
@@ -236,9 +259,8 @@ def analyze_portfolio(
         symbol_by_position.values()
     )
 
-    market_data = download_price_history(
-        yahoo_symbols,
-        period=MARKET_DATA_DOWNLOAD_PERIOD,
+    market_data = market_data_loader(
+        yahoo_symbols
     )
 
     # ---------------------------------------------------------
@@ -1253,6 +1275,9 @@ def persist_stage3_analysis_state(
     benchmark_risk: PortfolioBenchmarkRiskSummary,
     historical_risk_1d: PortfolioHistoricalTailRiskSummary,
     db_path: str | Path = STAGE3_DB_PATH,
+    source_reference: tuple[str, str] | None = None,
+    account_state_id: str | None = None,
+    now: datetime | None = None,
 ) -> tuple[
     PortfolioSnapshot,
     PortfolioRiskStateRecord,
@@ -1265,23 +1290,34 @@ def persist_stage3_analysis_state(
     already-computed Quant Engine results into Stage 3 canonical models.
     """
 
-    now = datetime.now(
-        timezone.utc
-    )
+    # Stage 5: ``source_reference`` is the (``ibkr://`` reference,
+    # structural fingerprint) of the IBKR account state version, and the
+    # AccountState is the one derived from that same version.
+    if now is None:
+        now = datetime.now(
+            timezone.utc
+        )
 
     store = Stage3Store(
         db_path
     )
 
-    account_state = (
-        store.get_latest_account_state()
-    )
+    if account_state_id is None:
+        account_state = (
+            store.get_latest_account_state()
+        )
 
-    account_state_id = (
-        account_state.account_state_id
-        if account_state is not None
-        else None
-    )
+        account_state_id = (
+            account_state.account_state_id
+            if account_state is not None
+            else None
+        )
+
+    if source_reference is None:
+        source_reference = (
+            str(Path(portfolio_file)),
+            _sha256_file(portfolio_file),
+        )
 
     snapshot = PortfolioSnapshot(
         snapshot_id=(
@@ -1290,16 +1326,8 @@ def persist_stage3_analysis_state(
             )
         ),
         timestamp=now,
-        source_file=str(
-            Path(
-                portfolio_file
-            )
-        ),
-        source_file_hash=(
-            _sha256_file(
-                portfolio_file
-            )
-        ),
+        source_file=source_reference[0],
+        source_file_hash=source_reference[1],
         quant_engine_version=(
             QUANT_ENGINE_VERSION
         ),

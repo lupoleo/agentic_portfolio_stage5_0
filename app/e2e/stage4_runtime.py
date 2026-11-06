@@ -131,9 +131,29 @@ class Stage4RuntimeConfiguration(Stage4Model):
         return canonical_fingerprint(self)
 
 
+IBKR_SOURCE_PREFIX = "ibkr://"
+
+
 class CanonicalStage4Runtime:
-    def __init__(self, configuration: Stage4RuntimeConfiguration) -> None:
+    def __init__(
+        self,
+        configuration: Stage4RuntimeConfiguration,
+        *,
+        portfolio_positions=None,
+        instrument_directory=None,
+        gateway_session=None,
+    ) -> None:
+        """``portfolio_positions``: Stage 5 passes the positions of the IBKR
+        account state version; the request's ``portfolio_file`` is then its
+        ``ibkr://`` reference and no workbook is read."""
         self.configuration = configuration
+        self.portfolio_positions = (
+            tuple(portfolio_positions) if portfolio_positions is not None else None
+        )
+        # Stage 5: IBKR identities of the run's instruments and an already open
+        # read-only Gateway session (not closed by the runtime).
+        self.instrument_directory = instrument_directory
+        self.gateway_session = gateway_session
         self.stage3_store = Stage3Store(configuration.database_path)
         self.integration_store = ScannerResearchIntegrationStore(
             configuration.database_path
@@ -241,12 +261,12 @@ class CanonicalStage4Runtime:
         sources = tuple(
             (f"source_{index:03d}:{path.name}", file_fingerprint(path))
             for index, path in enumerate(paths)
-        )
+        ) + self._ibkr_source(request)
         report = build_watch_universe_audit(
             _load_json(self.configuration.eligibility_report_path),
             _load_json(self.configuration.mapping_report_path),
             tuple(_load_json(path) for path in self.configuration.history_report_paths),
-            tuple(load_fineco_positions(request.portfolio_file)),
+            self._positions(request),
             portfolio_snapshot_id=run.portfolio_snapshot_id,
             as_of=request.as_of,
             assembled_at=request.as_of,
@@ -314,15 +334,21 @@ class CanonicalStage4Runtime:
         from app.broker.sources import SimulationFixture
 
         config = self.configuration
-        if not config.instrument_fixture_path:
-            raise ValueError("evidence_source='ibkr' needs an instrument directory (instrument_fixture_path)")
-        directory = InstrumentDirectory.from_fixture(SimulationFixture.load(config.instrument_fixture_path))
-        if config.ibkr_gateway_recording_path:
-            gateway = RecordedGatewaySession(config.ibkr_gateway_recording_path)
+        if self.instrument_directory is not None:
+            directory = self.instrument_directory
+        elif config.instrument_fixture_path:
+            directory = InstrumentDirectory.from_fixture(SimulationFixture.load(config.instrument_fixture_path))
         else:
-            gateway = IbAsyncGatewaySession(port=config.ibkr_gateway_port)
+            raise ValueError("evidence_source='ibkr' needs an instrument directory (instrument_fixture_path)")
+        if self.gateway_session is not None:
+            gateway = None
+            session = self.gateway_session
+        elif config.ibkr_gateway_recording_path:
+            gateway = session = RecordedGatewaySession(config.ibkr_gateway_recording_path)
+        else:
+            gateway = session = IbAsyncGatewaySession(port=config.ibkr_gateway_port)
         channels = build_ibkr_evidence_channels(
-            gateway, directory,
+            session, directory,
             secondary_market=market, secondary_news=news,
             secondary_fundamental=fundamental, secondary_analyst=analyst,
             secondary_technical_loader=technical_loader,
@@ -453,19 +479,36 @@ class CanonicalStage4Runtime:
             message="S2.2G did not create an ExecutionPlan",
         )
 
+    def _is_ibkr(self, request) -> bool:
+        return request.portfolio_file.startswith(IBKR_SOURCE_PREFIX)
+
+    def _positions(self, request):
+        if self._is_ibkr(request):
+            if self.portfolio_positions is None:
+                raise ValueError("an ibkr:// portfolio needs the account-state positions")
+            return self.portfolio_positions
+        return tuple(load_fineco_positions(request.portfolio_file))
+
+    def _ibkr_source(self, request):
+        if not self._is_ibkr(request):
+            return ()
+        return ((request.portfolio_file, request.portfolio_file_fingerprint),)
+
     def _source_paths(self, request):
-        return tuple(map(Path, (
+        files = (
             self.configuration.eligibility_report_path,
             self.configuration.mapping_report_path,
             *self.configuration.history_report_paths,
-            request.portfolio_file,
-        )))
+        )
+        if not self._is_ibkr(request):
+            files = (*files, request.portfolio_file)
+        return tuple(map(Path, files))
 
     def _source_fingerprints(self, request):
         return tuple(
             (str(path), file_fingerprint(path))
             for path in self._source_paths(request)
-        )
+        ) + self._ibkr_source(request)
 
     @staticmethod
     def _completed(stage, output_ids, payload, message):
