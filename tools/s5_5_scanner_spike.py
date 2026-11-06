@@ -31,7 +31,8 @@ def catalogue(xml_text: str) -> dict:
     locations = sorted({e.text for e in root.iter("locationCode") if e.text and e.text.startswith("STK.")})
     scans = sorted({e.text for e in root.iter("scanCode") if e.text})
     filters = sorted({e.text for e in root.iter("code") if e.text})
-    return {"stock_locations": locations, "scan_codes": scans, "filter_codes": filters}
+    instruments = sorted({e.text for e in root.iter("type") if e.text})
+    return {"stock_locations": locations, "scan_codes": scans, "filter_codes": filters, "instrument_types": instruments}
 
 
 def main() -> int:
@@ -58,6 +59,7 @@ def main() -> int:
         record["stock_locations"] = cat["stock_locations"]
         print(f"parameters in {time.perf_counter() - t:.1f}s: {len(cat['stock_locations'])} stock locations, "
               f"{len(cat['scan_codes'])} scan codes, {len(cat['filter_codes'])} filters")
+        print("instrument types: " + ", ".join(cat["instrument_types"][:30]))
         eu = [loc for loc in cat["stock_locations"] if loc.startswith("STK.EU.")]
         print("european stock locations: " + ", ".join(eu[:40]))
 
@@ -70,7 +72,9 @@ def main() -> int:
             for code in SCAN_CODES:
                 if code not in cat["scan_codes"]:
                     continue
-                sub = ScannerSubscription(instrument="STK", locationCode=location, scanCode=code, numberOfRows=50,
+                # European stock scans use the "STOCK.EU" instrument type; "STK" is US only.
+                instrument = "STOCK.EU" if location.startswith("STK.EU.") else "STK"
+                sub = ScannerSubscription(instrument=instrument, locationCode=location, scanCode=code, numberOfRows=50,
                                           marketCapAbove=MIN_MARKET_CAP_MUSD)
                 t = time.perf_counter()
                 try:
@@ -87,6 +91,7 @@ def main() -> int:
                 conids.update(i["conid"] for i in items)
                 record["scans"].append({"location": location, "scan_code": code, "rows": items, "error": error,
                                         "seconds": round(time.perf_counter() - t, 1)})
+                ib.sleep(0.5)  # let the Gateway settle the cancel before the next scan
                 print(f"- {location} {code}: rows={len(items)} ({time.perf_counter() - t:.1f}s)"
                       f"{' ERR ' + error if error else ''}")
         record["distinct_conids"] = len(conids)
