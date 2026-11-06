@@ -6,6 +6,7 @@ yfinance==1.6.0
 pydantic==2.12.5
 python-dotenv==1.2.2
 
+anthropic==2.6.0
 openai==2.53.0
 openai-agents==0.19.4
 

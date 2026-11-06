@@ -1,9 +1,20 @@
-"""Provider-neutral AI infrastructure for Stage 3."""
+"""Provider-neutral AI infrastructure (Claude is the Stage 5.0 provider)."""
 
 from .inference import (
     AIInferenceRecord,
     AIValidationStatus,
     build_inference_record,
+)
+from .claude_provider import (
+    ClaudeModelRouting,
+    ClaudeProvider,
+    ClaudeProviderConnectionError,
+    ClaudeProviderError,
+    ClaudeProviderPolicyError,
+    ClaudeProviderRefusalError,
+    ClaudeProviderResponseError,
+    ClaudeProviderTimeoutError,
+    ClaudeProviderValidationError,
 )
 from .local_provider import (
     LocalProvider,
@@ -33,6 +44,15 @@ __all__ = [
     "AIResponse",
     "AITask",
     "AIValidationStatus",
+    "ClaudeModelRouting",
+    "ClaudeProvider",
+    "ClaudeProviderConnectionError",
+    "ClaudeProviderError",
+    "ClaudeProviderPolicyError",
+    "ClaudeProviderRefusalError",
+    "ClaudeProviderResponseError",
+    "ClaudeProviderTimeoutError",
+    "ClaudeProviderValidationError",
     "DataSensitivity",
     "FinancialSentimentResult",
     "LocalProvider",

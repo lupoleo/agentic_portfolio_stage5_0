@@ -81,7 +81,7 @@ def main() -> int:
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--listing-references", type=Path)
-    parser.add_argument("--model", default="qwen3:8b")
+    parser.add_argument("--model", default="claude-sonnet-5-5", help="claude-* model, or ollama:<model>")
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--history-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--pause-seconds", type=float, default=2.0)
