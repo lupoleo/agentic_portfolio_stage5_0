@@ -43,6 +43,7 @@ class AccountSyncService:
         profile = profile_fingerprint(reading)
         observed = reading.observed_at.isoformat()
         previous = self._store.latest_version(reading.mode)
+        run_index = len(self._store.sync_runs(reading.mode))
 
         if previous is None:
             changes: tuple[StateChange, ...] = (StateChange(change_type=ChangeType.INITIAL, subject="ACCOUNT"),)
@@ -74,7 +75,8 @@ class AccountSyncService:
             new_version = True
 
         result = SyncResult(
-            sync_id=f"SYNC-{hashlib.sha256(f'{reading.mode.value}|{observed}'.encode()).hexdigest()[:16]}",
+            # The run index keeps a replayed observation (same recorded reading, rerun) a distinct sync run.
+            sync_id=f"SYNC-{hashlib.sha256(f'{reading.mode.value}|{observed}|{run_index}'.encode()).hexdigest()[:16]}",
             observed_at=reading.observed_at,
             outcome=outcome,
             version=version,
