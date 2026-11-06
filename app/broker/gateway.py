@@ -25,6 +25,7 @@ from .ibkr_client import BrokerClientError, BrokerNoDataError
 NO_PERMISSION_CODES = frozenset({162, 354, 10167, 10168})  # no market-data permission / subscription
 NO_DATA_CODES = frozenset({200, 10197})  # no security definition / no data
 _HEADLINE_META = re.compile(r"^\{[^}]*\}")
+NEWS_ATTEMPTS = 3
 
 
 class BrokerPermissionError(BrokerNoDataError):
@@ -147,9 +148,13 @@ class IbAsyncGatewaySession:
         if not provider_codes:
             return []
         self._errors.clear()
-        news = self._ib.reqHistoricalNews(conid, "+".join(provider_codes), "", "", limit)
-        if news is None:  # ib_async returns None after its 4-second timeout
-            raise BrokerClientError(f"news {conid}: timeout")
+        news = None
+        for _ in range(NEWS_ATTEMPTS):  # ib_async gives up after a fixed 4 s (AMZN timed out once in the 2026-11-06 recording)
+            news = self._ib.reqHistoricalNews(conid, "+".join(provider_codes), "", "", limit)
+            if news is not None:
+                break
+        if news is None:
+            raise BrokerClientError(f"news {conid}: timeout after {NEWS_ATTEMPTS} attempts")
         return [Headline(n.time, n.providerCode, n.articleId, clean_headline(n.headline)) for n in news]
 
 
@@ -196,3 +201,48 @@ def history_with_listing_fallback(
         notes.append(f"history from {info.symbol}@{info.exchange} (conid {alt}) instead of {primary.symbol}@{exchange}")
         return HistoryResult(bars, info, conid, tuple(notes))
     raise BrokerPermissionError("; ".join(notes) + "; no permitted listing in the same currency")
+
+
+class RecordedGatewaySession:
+    """``GatewaySession`` replaying a ``tools.s5_record_gateway_fixtures`` recording (offline runs, tests)."""
+
+    def __init__(self, recording: dict | str) -> None:
+        import json
+        from pathlib import Path
+
+        data = json.loads(Path(recording).read_text(encoding="utf-8")) if isinstance(recording, str) else recording
+        self._providers = list(data.get("news_providers") or [])
+        self._instruments = {int(k): v for k, v in (data.get("instruments") or {}).items()}
+
+    def _entry(self, conid: int) -> dict:
+        entry = self._instruments.get(conid)
+        if entry is None:
+            raise BrokerNoDataError(f"conid {conid} not in recording")
+        return entry
+
+    def contract_info(self, conid: int, exchange: str = "") -> ContractInfo:
+        c = self._entry(conid).get("contract")
+        if not c:
+            raise BrokerNoDataError(f"conid {conid}: no recorded contract")
+        return ContractInfo(**c)
+
+    def daily_history(self, conid: int, exchange: str, *, duration: str = "1 Y") -> list[DailyBar]:
+        entry = self._entry(conid)
+        if "history_error" in entry:
+            raise BrokerClientError(entry["history_error"])
+        bars = entry.get("bars") or []
+        if not bars:
+            raise BrokerNoDataError(f"conid {conid}: no recorded bars")
+        return [DailyBar(date.fromisoformat(b["day"]), b["open"], b["high"], b["low"], b["close"], b["volume"]) for b in bars]
+
+    def news_providers(self) -> list[str]:
+        return list(self._providers)
+
+    def headlines(self, conid: int, provider_codes: list[str], *, limit: int = 20) -> list[Headline]:
+        entry = self._entry(conid)
+        if "news_error" in entry:
+            raise BrokerClientError(entry["news_error"])
+        return [
+            Headline(datetime.fromisoformat(h["published_at"]), h["provider_code"], h["article_id"], h["headline"])
+            for h in (entry.get("headlines") or [])[:limit]
+        ]

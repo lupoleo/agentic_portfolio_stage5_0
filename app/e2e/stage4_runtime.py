@@ -91,6 +91,20 @@ class Stage4RuntimeConfiguration(Stage4Model):
     timeout_seconds: float = Field(default=600.0, gt=0)
     max_hypotheses: int | None = Field(default=None, ge=1)
     selected_parameters: dict[str, Any] | None = None
+    # Stage 5 evidence sources (§5D). "yahoo" keeps the 4.0 providers; "ibkr"
+    # uses IB Gateway history/news first with Yahoo as declared secondary.
+    evidence_source: str = "yahoo"
+    ibkr_gateway_port: int = Field(default=4001, gt=0)
+    ibkr_gateway_recording_path: str | None = None  # replay a recording instead of a live Gateway
+    instrument_fixture_path: str | None = None  # TEMPORARY: simulated holdings → instrument directory
+
+    @field_validator("evidence_source", mode="before")
+    @classmethod
+    def known_evidence_source(cls, value):
+        result = str(value).strip().lower()
+        if result not in {"yahoo", "ibkr"}:
+            raise ValueError("evidence_source must be 'yahoo' or 'ibkr'")
+        return result
 
     @field_validator(
         "database_path", "portfolio_snapshot_id", "portfolio_risk_state_id",
@@ -278,6 +292,47 @@ class CanonicalStage4Runtime:
             fundamental = YahooFundamentalEvidenceProvider()
             analyst = YahooAnalystEvidenceProvider()
             technical_loader = build_canonical_technical_input
+        gateway = None
+        if not cache_only and self.configuration.evidence_source == "ibkr":
+            gateway, channels = self._ibkr_channels(market, news, fundamental, analyst, technical_loader)
+            market, news = channels.market, channels.news
+            fundamental, analyst = channels.fundamental, channels.analyst
+            technical_loader = channels.canonical_technical_loader
+        try:
+            return self._run_research_integration(
+                request, run, universe, cache_only, research_service, scoring_service,
+                market, news, fundamental, analyst, technical_loader,
+            )
+        finally:
+            if gateway is not None and hasattr(gateway, "close"):
+                gateway.close()
+
+    def _ibkr_channels(self, market, news, fundamental, analyst, technical_loader):
+        from app.ai.ibkr_evidence_wiring import build_ibkr_evidence_channels
+        from app.broker.gateway import IbAsyncGatewaySession, RecordedGatewaySession
+        from app.broker.instrument_directory import InstrumentDirectory
+        from app.broker.sources import SimulationFixture
+
+        config = self.configuration
+        if not config.instrument_fixture_path:
+            raise ValueError("evidence_source='ibkr' needs an instrument directory (instrument_fixture_path)")
+        directory = InstrumentDirectory.from_fixture(SimulationFixture.load(config.instrument_fixture_path))
+        if config.ibkr_gateway_recording_path:
+            gateway = RecordedGatewaySession(config.ibkr_gateway_recording_path)
+        else:
+            gateway = IbAsyncGatewaySession(port=config.ibkr_gateway_port)
+        channels = build_ibkr_evidence_channels(
+            gateway, directory,
+            secondary_market=market, secondary_news=news,
+            secondary_fundamental=fundamental, secondary_analyst=analyst,
+            secondary_technical_loader=technical_loader,
+        )
+        return gateway, channels
+
+    def _run_research_integration(
+        self, request, run, universe, cache_only, research_service, scoring_service,
+        market, news, fundamental, analyst, technical_loader,
+    ) -> Stage4StageResult:
         service = ScannerResearchIntegrationService(
             stage3_store=self.stage3_store,
             integration_store=self.integration_store,
