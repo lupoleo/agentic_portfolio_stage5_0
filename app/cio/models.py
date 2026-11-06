@@ -139,6 +139,9 @@ class DataSource(str, Enum):
     MARKET_DATA = "MARKET_DATA"
     NEWS_PROVIDER = "NEWS_PROVIDER"
     OFFICIAL_SOURCE = "OFFICIAL_SOURCE"
+    # Stage 5.0 (additive): live IBKR account, and the TEMPORARY simulation
+    IBKR = "IBKR"
+    IBKR_SIMULATED = "IBKR_SIMULATED"
 
 
 class CacheStatus(str, Enum):

@@ -1,3 +1,24 @@
+# Agentic Portfolio — Stage 5.0
+
+Stage 5.0 is a new major release of the Aleph Innovation Agentic Portfolio. It
+keeps the Stage 4.0 functional architecture and replaces three provider
+boundaries: the live **IBKR** account instead of Fineco Excel exports, IBKR data
+instead of Yahoo/EODHD/ECB, and **Claude** instead of a local Ollama model.
+
+Architecture source of truth: [`STAGE_5_0_ARCHITECTURE.md`](STAGE_5_0_ARCHITECTURE.md).
+Current checkpoint: [`docs/S5.0-2-ACCOUNT-SYNC.md`](docs/S5.0-2-ACCOUNT-SYNC.md).
+
+```powershell
+# account sync on recorded real IBKR readings (TEMPORARY simulation of the Fineco USD stocks)
+python -m tools.stage5_account_sync --mode simulated --recording data/recordings/ibkr_account_2026-11.json
+python -m pytest -q -p no:cacheprovider
+```
+
+The rest of this README describes the inherited Stage 4.0 baseline and is
+updated as each module is migrated.
+
+---
+
 # Agentic Portfolio — Stage 4.0
 
 A personal, human-controlled investment research system. It reads a real

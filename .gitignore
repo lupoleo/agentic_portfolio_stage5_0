@@ -97,3 +97,7 @@ CIO_DEMO_ROADMAP.pdf
 
 # Salesforce CLI local project state
 .sf/
+
+# Stage 5.0 TEMPORARY simulation fixtures (personal holdings) and IBKR recordings
+data/simulation/*.json
+data/recordings/
