@@ -48,7 +48,7 @@ def main() -> int:
             counts = {"ok": 0, "no_permission": 0, "other_error": 0}
             for conid in list(rows)[: args.per_venue]:
                 try:
-                    bars = session.daily_history(conid, "", duration="1 M")
+                    bars = session.daily_history(conid, "SMART", duration="1 M")
                     counts["ok" if bars else "other_error"] += 1
                 except BrokerPermissionError:
                     counts["no_permission"] += 1
