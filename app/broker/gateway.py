@@ -55,6 +55,8 @@ class ContractInfo:
     long_name: str
     sec_type: str
     stock_type: str = ""  # IBKR ContractDetails.stockType: COMMON, ETF, ADR, REIT, PREFERRED, ...
+    industry: str = ""  # IBKR ContractDetails.industry, e.g. Financial, Technology, Energy
+    category: str = ""  # IBKR ContractDetails.category, e.g. Banks, Telecommunications
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,10 @@ class Headline:
 
 class GatewaySession(Protocol):
     def contract_info(self, conid: int, exchange: str = "") -> ContractInfo: ...
+
+    def resolve_stock(self, symbol: str, primary_exchange: str, currency: str) -> int:
+        """conid of a stock/ETF listing by symbol, primary exchange and currency (read-only lookup)."""
+        ...
 
     def daily_history(self, conid: int, exchange: str, *, duration: str = "1 Y") -> list[DailyBar]: ...
 
@@ -163,7 +169,19 @@ class IbAsyncGatewaySession:
             conid=c.conId, symbol=c.symbol, exchange=c.exchange, primary_exchange=c.primaryExchange or c.exchange,
             currency=c.currency, long_name=d.longName or "", sec_type=c.secType,
             stock_type=getattr(d, "stockType", "") or "",
+            industry=getattr(d, "industry", "") or "", category=getattr(d, "category", "") or "",
         )
+
+    def resolve_stock(self, symbol: str, primary_exchange: str, currency: str) -> int:
+        from ib_async import Contract
+
+        self._errors.clear()
+        details = self._ib.reqContractDetails(Contract(symbol=symbol, secType="STK", exchange="SMART",
+                                                       primaryExchange=primary_exchange, currency=currency))
+        if not details:
+            self._raise_last_error(f"contract {symbol}@{primary_exchange}")
+            raise BrokerNoDataError(f"contract {symbol}@{primary_exchange} {currency}: not found")
+        return details[0].contract.conId
 
     def daily_history(self, conid: int, exchange: str, *, duration: str = "1 Y") -> list[DailyBar]:
         self._errors.clear()
@@ -304,6 +322,13 @@ class RecordedGatewaySession:
         if not c:
             raise BrokerNoDataError(f"conid {conid}: no recorded contract")
         return ContractInfo(**c)
+
+    def resolve_stock(self, symbol: str, primary_exchange: str, currency: str) -> int:
+        for conid, entry in self._instruments.items():
+            c = entry.get("contract") or {}
+            if (c.get("symbol"), c.get("primary_exchange"), c.get("currency")) == (symbol, primary_exchange, currency):
+                return conid
+        raise BrokerNoDataError(f"contract {symbol}@{primary_exchange} {currency} not in recording")
 
     def daily_history(self, conid: int, exchange: str, *, duration: str = "1 Y") -> list[DailyBar]:
         entry = self._entry(conid)

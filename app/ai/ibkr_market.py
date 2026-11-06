@@ -11,9 +11,12 @@ high-dividend names can differ slightly from 4.0.
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 import pandas as pd
 
 from app.ai.canonical_technical import canonical_technical_from_history
+from app.ai.ibkr_market_context import MarketContextBuilder
 from app.ai.market_evidence_provider import YahooMarketEvidenceProvider
 from app.broker.gateway import GatewaySession, history_with_listing_fallback
 from app.broker.instrument_directory import InstrumentDirectory
@@ -58,8 +61,10 @@ class IbkrHistoryLoader:
 class IbkrMarketEvidenceProvider(YahooMarketEvidenceProvider):
     """4.0 market facts computed on IBKR history, labelled as IBKR."""
 
-    def __init__(self, loader: IbkrHistoryLoader) -> None:
+    def __init__(self, loader: IbkrHistoryLoader, context: MarketContextBuilder | None = None) -> None:
         super().__init__(history_loader=loader)
+        self._loader = loader
+        self._context = context
 
     @property
     def provider_name(self) -> str:
@@ -80,7 +85,34 @@ class IbkrMarketEvidenceProvider(YahooMarketEvidenceProvider):
                 "metadata": {**item.evidence.metadata, "provider": PROVIDER_NAME, "source_id": source.source_id},
             })
             items.append(item.model_copy(update={"source": source, "evidence": evidence, "metadata": {**item.metadata, "source": "IBKR"}}))
+        if items and self._context is not None:
+            context_item = self._context_item(request.ticker, items[0])
+            if context_item is not None:
+                items.append(context_item)
         return result.model_copy(update={"items": items, "metadata": {**result.metadata, "source": "IBKR"}})
+
+    def _context_item(self, ticker, base):
+        try:
+            close = pd.to_numeric(self._loader(ticker)["Close"], errors="coerce").dropna()
+        except Exception:  # noqa: BLE001 - context is optional evidence
+            return None
+        described = self._context.describe(ticker, close)
+        if described is None:
+            return None
+        text, meta = described
+        digest = sha256(f"{ticker}|{text}".encode()).hexdigest()[:12]
+        source_id = f"SRC-IBKRCTX-{ticker}-{digest}"
+        source = base.source.model_copy(update={
+            "source_id": source_id,
+            "source_name": "IBKR market context (benchmark and sector ETF proxies, IB Gateway daily bars)",
+            "metadata": {"ticker": ticker, "source": "IBKR", **meta},
+        })
+        evidence = base.evidence.model_copy(update={
+            "evidence_id": f"EVID-IBKRCTX-{ticker}-{digest}", "text": text,
+            "metadata": {"provider": PROVIDER_NAME, "source_id": source_id, "context": "MARKET_SECTOR"},
+        })
+        return base.model_copy(update={"source": source, "evidence": evidence,
+                                       "metadata": {**base.metadata, "context": "MARKET_SECTOR"}})
 
 
 def ibkr_canonical_technical_loader(loader: IbkrHistoryLoader):
