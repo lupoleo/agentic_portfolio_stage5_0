@@ -16,8 +16,8 @@ Two independent locks keep it read-only:
 
 from __future__ import annotations
 
+import html
 import logging
-
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -28,6 +28,7 @@ from .ibkr_client import BrokerClientError, BrokerNoDataError
 NO_PERMISSION_CODES = frozenset({162, 354, 10167, 10168})  # no market-data permission / subscription
 NO_DATA_CODES = frozenset({200, 10197})  # no security definition / no data
 _HEADLINE_META = re.compile(r"^\{[^}]*\}")
+_HTML_TAG = re.compile(r"<[^>]+>")
 NEWS_ATTEMPTS = 3
 
 
@@ -89,6 +90,10 @@ class GatewaySession(Protocol):
 
     def headlines(self, conid: int, provider_codes: list[str], *, limit: int = 20) -> list[Headline]: ...
 
+    def news_article(self, provider_code: str, article_id: str) -> str:
+        """Plain text of one news article (read-only); empty when only a binary/PDF body exists."""
+        ...
+
     def scanner(self, instrument: str, location: str, scan_code: str, *, rows: int = 50,
                 market_cap_above_musd: float | None = None) -> list[ScannerRow]: ...
 
@@ -99,6 +104,14 @@ class GatewaySession(Protocol):
 
 def scan_key(instrument: str, location: str, scan_code: str) -> str:
     return f"{instrument}|{location}|{scan_code}"
+
+
+def article_text(raw: str) -> str:
+    """News article body as plain text: HTML tags and entities removed, whitespace collapsed."""
+
+    text = _HTML_TAG.sub(" ", raw or "")
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def clean_headline(text: str) -> str:
@@ -252,6 +265,16 @@ class IbAsyncGatewaySession:
             raise BrokerClientError(f"news {conid}: timeout after {NEWS_ATTEMPTS} attempts")
         return [Headline(n.time, n.providerCode, n.articleId, clean_headline(n.headline)) for n in news]
 
+    def news_article(self, provider_code: str, article_id: str) -> str:
+        self._errors.clear()
+        article = self._ib.reqNewsArticle(provider_code, article_id)
+        if article is None:
+            self._raise_last_error(f"article {article_id}")
+            raise BrokerNoDataError(f"article {article_id}: no body")
+        if article.articleType != 0:  # 1 = binary (PDF, base64): not usable as text evidence
+            return ""
+        return article_text(article.articleText)
+
 
 @dataclass(frozen=True)
 class HistoryResult:
@@ -310,6 +333,7 @@ class RecordedGatewaySession:
         self._instruments = {int(k): v for k, v in (data.get("instruments") or {}).items()}
         self._scans = dict(data.get("scans") or {})
         self._fx = dict(data.get("fx") or {})
+        self._articles = dict(data.get("articles") or {})
 
     def _entry(self, conid: int) -> dict:
         entry = self._instruments.get(conid)
@@ -350,6 +374,12 @@ class RecordedGatewaySession:
             Headline(datetime.fromisoformat(h["published_at"]), h["provider_code"], h["article_id"], h["headline"])
             for h in (entry.get("headlines") or [])[:limit]
         ]
+
+    def news_article(self, provider_code: str, article_id: str) -> str:
+        text = self._articles.get(article_id)
+        if text is None:
+            raise BrokerNoDataError(f"article {article_id} not in recording")
+        return article_text(text)
 
     def scanner(self, instrument: str, location: str, scan_code: str, *, rows: int = 50,
                 market_cap_above_musd: float | None = None) -> list[ScannerRow]:

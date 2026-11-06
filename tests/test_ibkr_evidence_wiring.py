@@ -291,3 +291,20 @@ def test_runtime_ibkr_needs_an_instrument_directory(tmp_path):
     runtime = CanonicalStage4Runtime(runtime_configuration(tmp_path, evidence_source="ibkr"))
     with pytest.raises(ValueError, match="instrument directory"):
         runtime._ibkr_channels(None, None, None, None, None)
+
+
+def test_newest_headlines_carry_the_article_text():
+    from app.ai.ibkr_news_evidence_provider import IbkrGatewayNewsEvidenceProvider
+    from app.broker.gateway import article_text
+
+    recording = {**RECORDING, "articles": {
+        "DJ-N$1": "<p>Microsoft said Azure capacity will grow 40% in fiscal 2027 &amp; capex rises.</p>" + " word" * 600,
+    }}
+    provider = IbkrGatewayNewsEvidenceProvider(RecordedGatewaySession(recording), clock=lambda: NOW)
+    first, second = provider.fetch(EvidenceRequest(ticker="MSFT", metadata={"conid": MSFT}, max_items=10)).items
+    assert first.evidence.text.startswith("Microsoft expands Azure capacity\n\nMicrosoft said Azure capacity will grow 40%")
+    assert "&amp;" not in first.evidence.text and "<p>" not in first.evidence.text
+    assert first.evidence.text.endswith("[...]") and len(first.evidence.text) < 1600
+    assert first.metadata["article_body"] is True
+    assert second.evidence.text == "Microsoft upgraded at a broker"  # no body recorded: headline only
+    assert article_text("<b>A</b>\n\n B &lt;C&gt;") == "A B <C>"
