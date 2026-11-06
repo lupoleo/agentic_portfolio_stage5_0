@@ -1,0 +1,25 @@
+* text=auto
+
+# Source and documentation
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Windows scripts
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary formats
+*.pdf binary
+*.zip binary
+*.xlsx binary
+*.xls binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.parquet binary

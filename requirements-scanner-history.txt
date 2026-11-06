@@ -1,0 +1,2 @@
+# Optional Scanner S2.2D calendar dependency; base project requirements still apply.
+exchange-calendars==4.13.2

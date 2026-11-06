@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Fineco portfolio data - NEVER publish personal portfolio exports
+data/input/*.xlsx
+data/input/*.xls
+data/input/*.csv
+
+# Generated Portfolio Analysis reports
+data/output/
+
+# Stage 3 local state - NEVER publish account/cash/decision databases
+data/state/*.db
+data/state/*.sqlite
+data/state/*.sqlite3
+data/state/*.json
+data/state/*.parquet
+
+# Cached market/news intelligence
+data/cache/
+data/news_cache/
+
+# Temporary Excel files
+~$*.xlsx
+~$*.xls
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Local databases and portfolio state
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+
+# Fineco-derived local caches
+data/input/fineco_cache/
+
+# Validation and patch-working artifacts
+artifacts/
+payload/
+PATCH_INSTRUCTIONS/
+*.zip
+*.patch
+pytest_full.txt
+
+# Historical source backups
+*.bak
+*_backup
+*.backup
+*.backup.*
+
+# One-off patch/install scripts
+install_*.py
+apply_fix.py
+apply_*.ps1
+
+# Intermediate implementation notes retained locally
+AI*_INIT_ADDENDUM.txt
+PF-*_README*.txt
+README_AI*.txt
+README_PF*.txt
+README_*PATCH*.txt
+README_FIX.txt
+README_TEST_FIX.txt
+
+# Additional legacy/intermediate documentation
+README.txt
+README_AI*.md
+README_*FIX*.txt
+
+# Generated duplicate of Markdown roadmap
+CIO_DEMO_ROADMAP.pdf
+
+# Salesforce CLI local project state
+.sf/
+
+# Stage 5.0 TEMPORARY simulation fixtures (personal holdings) and IBKR recordings
+data/simulation/*.json
+data/recordings/

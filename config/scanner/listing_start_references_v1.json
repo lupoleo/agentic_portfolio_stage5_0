@@ -1,0 +1,41 @@
+{
+  "schema": "scanner-listing-start-references-v1",
+  "references": [
+    {
+      "exchange": "NASDAQ",
+      "symbol": "SPCX",
+      "issuer_name": "Space Exploration Technologies Corp.",
+      "isin": "US84615Q1031",
+      "first_session": "2026-06-12",
+      "event_kind": "IPO",
+      "ipo_confirmed": true,
+      "date_status": "CONFIRMED_TRADING_START",
+      "source_kind": "ISSUER",
+      "source_url": "https://ir.spacex.com/updates/releases-details/2026/Space-Exploration-Technologies-Corp--Announces-Closing-of-Initial-Public-Offering-Including-Full-Exercise-of-Underwriters-Option-to-Purchase-Additional-Shares-2026-RgoR-Y1Vwh/default.aspx",
+      "source_title": "Space Exploration Technologies Corp. Announces Closing of Initial Public Offering",
+      "source_excerpt": "The shares began trading on the Nasdaq Global Select Market and Nasdaq Texas Market on June 12, 2026, under the symbol SPCX.",
+      "observed_at": "2026-09-23T00:00:00+00:00",
+      "reviewed_at": "2026-09-23T00:00:00+00:00",
+      "reviewed_by": "Codex-assisted primary-source review",
+      "review_status": "APPROVED"
+    },
+    {
+      "exchange": "NYSE",
+      "symbol": "LYNX",
+      "issuer_name": "Lyntris Inc.",
+      "isin": null,
+      "first_session": "2026-08-19",
+      "event_kind": "IPO",
+      "ipo_confirmed": true,
+      "date_status": "CONFIRMED_TRADING_START",
+      "source_kind": "EXCHANGE",
+      "source_url": "https://www.youtube.com/watch?v=90hxGlsH1Xs",
+      "source_title": "Defense Tech Company Lyntris Raises $297.5 Million in IPO",
+      "source_excerpt": "8-19-2026: Defense Tech Company Lyntris Raises $297.5 Million in IPO.",
+      "observed_at": "2026-09-23T00:00:00+00:00",
+      "reviewed_at": "2026-09-23T00:00:00+00:00",
+      "reviewed_by": "Codex-assisted primary-source review",
+      "review_status": "APPROVED"
+    }
+  ]
+}

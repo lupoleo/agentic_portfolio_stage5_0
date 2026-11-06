@@ -1,0 +1,90 @@
+{
+  "schema": "portfolio-instrument-references-v1",
+  "references": [
+    {
+      "reference_id": "fineco-kering-cfd-v1",
+      "isin": "",
+      "broker_symbol": "KERCFD.CFD",
+      "market_data_symbol": "KER.PA",
+      "market_data_method": "DIRECT",
+      "economic_direction": "SHORT",
+      "leverage_multiplier": 1.0,
+      "expiry_date": "2027-09-27",
+      "reviewed": true,
+      "reviewed_at": "2026-09-26",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT",
+      "accounting_note": "Fineco market value is full notional; margin and X5 are informational only."
+    },
+    {
+      "reference_id": "fineco-diasorin-long-5x-v1",
+      "isin": "IT0005686685",
+      "broker_symbol": "",
+      "market_data_symbol": "DIA.MI",
+      "market_data_method": "LEVERAGED_PROXY",
+      "economic_direction": "LONG",
+      "leverage_multiplier": 5.0,
+      "expiry_date": "2026-10-29",
+      "reviewed": true,
+      "reviewed_at": "2026-09-26",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT"
+    },
+    {
+      "reference_id": "fineco-fincantieri-short-5x-v1",
+      "isin": "IT0005686883",
+      "broker_symbol": "",
+      "market_data_symbol": "FCT.MI",
+      "market_data_method": "LEVERAGED_PROXY",
+      "economic_direction": "SHORT",
+      "leverage_multiplier": 5.0,
+      "expiry_date": "2026-10-29",
+      "reviewed": true,
+      "reviewed_at": "2026-09-26",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT"
+    },
+    {
+      "reference_id": "fineco-moncler-short-5x-v1",
+      "isin": "IT0005687683",
+      "broker_symbol": "",
+      "market_data_symbol": "MONC.MI",
+      "market_data_method": "LEVERAGED_PROXY",
+      "economic_direction": "SHORT",
+      "leverage_multiplier": 5.0,
+      "expiry_date": "2026-10-29",
+      "reviewed": true,
+      "reviewed_at": "2026-09-26",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT"
+    },
+    {
+      "reference_id": "fineco-buzzi-short-5x-v1",
+      "isin": "IT0005687667",
+      "broker_symbol": "",
+      "market_data_symbol": "BZU.MI",
+      "market_data_method": "LEVERAGED_PROXY",
+      "economic_direction": "SHORT",
+      "leverage_multiplier": 5.0,
+      "expiry_date": "2026-10-29",
+      "reviewed": true,
+      "reviewed_at": "2026-09-26",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT"
+    },
+    {
+      "reference_id": "fineco-unicredit-long-5x-v1",
+      "isin": "IT0005670135",
+      "broker_symbol": "",
+      "market_data_symbol": "UCG.MI",
+      "market_data_method": "LEVERAGED_PROXY",
+      "economic_direction": "LONG",
+      "leverage_multiplier": 5.0,
+      "expiry_date": "2026-10-29",
+      "reviewed": true,
+      "reviewed_at": "2026-10-04",
+      "reviewed_by": "OPERATOR",
+      "evidence_kind": "FINECO_OPERATOR_SCREENSHOT"
+    }
+  ]
+}
