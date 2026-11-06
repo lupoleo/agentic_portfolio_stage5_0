@@ -16,6 +16,8 @@ Two independent locks keep it read-only:
 
 from __future__ import annotations
 
+import logging
+
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -99,6 +101,14 @@ def clean_headline(text: str) -> str:
     return _HEADLINE_META.sub("", text or "").strip()
 
 
+class _ScannerCancelFilter(logging.Filter):
+    """ib_async logs the Gateway's acknowledgement of every scanner cancel as
+    ``Error 162 ... API scanner subscription cancelled``: benign, so hidden."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "scanner subscription cancelled" not in record.getMessage()
+
+
 class IbAsyncGatewaySession:
     """``GatewaySession`` over ``ib_async``; always ``readonly=True``."""
 
@@ -106,6 +116,9 @@ class IbAsyncGatewaySession:
         from ib_async import IB
 
         self._ib = IB()
+        wrapper_log = logging.getLogger("ib_async.wrapper")
+        if not any(isinstance(f, _ScannerCancelFilter) for f in wrapper_log.filters):
+            wrapper_log.addFilter(_ScannerCancelFilter())
         self._errors: dict[int, tuple[int, str]] = {}
         self._ib.errorEvent += self._on_error
         self._ib.connect(host, port, clientId=client_id, readonly=True, timeout=timeout)
