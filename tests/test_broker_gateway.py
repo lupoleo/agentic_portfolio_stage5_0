@@ -135,4 +135,5 @@ def test_session_exposes_no_order_methods():
     from app.broker.gateway import IbAsyncGatewaySession
 
     public = {n for n in dir(IbAsyncGatewaySession) if not n.startswith("_")}
-    assert public == {"close", "contract_info", "daily_history", "news_providers", "headlines"}
+    assert public == {"close", "contract_info", "daily_history", "news_providers", "headlines",
+                      "scanner", "fx_daily_history"}  # read-only market scanners and FX bars (S5.0-5)

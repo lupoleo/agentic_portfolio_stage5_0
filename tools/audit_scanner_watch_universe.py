@@ -36,7 +36,7 @@ from app.scanner.watch_universe import (
     assemble_research_watch_universe,
     watch_universe_to_dict,
 )
-from app.scanner.watch_universe_contracts import CandidateEvidenceBundle
+from app.scanner.watch_universe_contracts import CandidateEvidenceBundle, WatchUniversePolicy
 
 
 DEFAULT_OUTPUT = Path("data/cache/scanner/watch_universe")
@@ -219,6 +219,8 @@ def build_watch_universe_audit(
         ))
 
     universe = assemble_research_watch_universe(
+        # The mapping report names its market-data provider: Yahoo (4.0) or IBKR (5.0).
+        policy=WatchUniversePolicy(market_data_provider_id=mapping["provider_id"]),
         candidate_inputs=bundles,
         portfolio_positions=positions,
         portfolio_snapshot_id=portfolio_snapshot_id,

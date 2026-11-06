@@ -11,7 +11,13 @@ from app.scanner.history_quality_contracts import SessionCalendar, MarketSession
 
 EXPECTED_CALENDAR_VERSION = "4.13.2"
 # Only mappings exercised in the initial calendar acceptance are enabled here.
-CALENDAR_BINDINGS = MappingProxyType({"BIT": "XMIL", "XETRA": "XETR", "NYSE": "XNYS", "NASDAQ": "NASDAQ"})
+CALENDAR_BINDINGS = MappingProxyType({
+    "BIT": "XMIL", "XETRA": "XETR", "NYSE": "XNYS", "NASDAQ": "NASDAQ",
+    # IBKR primary-exchange codes of the S5.0-5 scanner venues (US listings
+    # follow the NYSE session calendar; European venues their own MIC).
+    "ARCA": "XNYS", "AMEX": "XNYS", "BATS": "XNYS",
+    "IBIS": "XETR", "SBF": "XPAR", "AEB": "XAMS", "BVME": "XMIL", "LSE": "XLON",
+})
 
 
 @dataclass(frozen=True)

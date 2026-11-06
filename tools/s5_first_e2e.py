@@ -13,9 +13,11 @@ Steps, all read-only:
 2. portfolio analysis on IB Gateway history (4.0 quant engines unchanged):
    AccountState, PortfolioSnapshot and PortfolioRiskState bound to the
    ``ibkr://`` state version;
-3. the 4.0 E2E service with IBKR evidence channels and Claude: holdings-only
-   watch universe (the IBKR scanner is S5.0-5), research and opportunity
-   scoring. The run stops at operator selection; the dry run on an IBKR
+3. the IBKR scanner universe (S5.0-5): read-only IB market scanners, contract
+   details and daily bars, gated by the 4.0 eligibility and history-quality
+   rules (``--no-scanner`` keeps the holdings-only universe);
+4. the 4.0 E2E service with IBKR evidence channels and Claude: watch universe
+   (holdings + scanner candidates), research and opportunity scoring. The run stops at operator selection; the dry run on an IBKR
    snapshot is part B.
 
 No order, alert or watchlist is ever created; the side-effect counters stay 0.
@@ -39,12 +41,14 @@ from app.e2e.stage4_runtime import CanonicalStage4Runtime, Stage4RuntimeConfigur
 from app.e2e.stage4_service import Stage4E2EService
 from app.e2e.stage4_store import Stage4E2EStore
 from app.e2e.stage5_portfolio import analyze_account_version, directory_from_version
+from app.scanner.ibkr_universe import DEFAULT_PLAN, acquire_universe, build_scanner_reports
 
 DEFAULT_OUTPUT = Path("data/cache/e2e/stage5/first_e2e")
 
+DEFAULT_SCANNER_MAX_HYPOTHESES = 10  # Claude research cost cap when scanner candidates are on
+
 EMPTY_SCANNER_REPORTS = {
-    # The IBKR scanner universe arrives with S5.0-5: until then the watch
-    # universe is built from the account holdings only.
+    # ``--no-scanner``: the watch universe is built from the account holdings only.
     "eligibility.json": {"audit_id": "E2E-S2.2B", "all_decisions": [], "decision_count": 0},
     "mapping.json": {"audit_id": "E2E-S2.2C-MAPPING", "provider_id": "NONE", "mapping_version": "stage5-none",
                      "mappings": [], "mapping_count": 0},
@@ -78,6 +82,36 @@ def write_scanner_placeholders(directory: Path) -> dict[str, str]:
     return paths
 
 
+def merge_scanner_refs(directory, refs) -> list[str]:
+    """Add scanner candidates to the instrument directory; a ticker already
+    bound to another conid (a holding or reference ETF) keeps its binding."""
+    skipped = []
+    for ref in refs:
+        existing = directory.get(ref.ticker)
+        if existing is None:
+            directory.add(ref)
+        elif existing.conid != ref.conid:
+            skipped.append(ref.ticker)
+    return skipped
+
+
+def run_scanner(session, version, output: Path, *, as_of, max_listings):
+    held = frozenset(p.conid for p in version.reading.positions if getattr(p, "conid", None))
+    acquisition = acquire_universe(session, DEFAULT_PLAN, now=as_of)
+    failed = [s for s in acquisition.scans if s.error]
+    print(f"scanner: plan={DEFAULT_PLAN.plan_id} scans={len(acquisition.scans)} failed={len(failed)} "
+          f"listings={len(acquisition.listings)}")
+    for scan in failed:
+        print(f"  scan {scan.query.location} {scan.query.scan_code}: {scan.error}")
+    reports = build_scanner_reports(session, acquisition, as_of=as_of, max_listings=max_listings,
+                                    exclude_conids=held, progress=lambda line: print("  " + line))
+    paths = reports.write(output)
+    print("scanner_counts:", reports.summary["counts"])
+    if reports.summary["fx_errors"]:
+        print("scanner_fx_errors:", reports.summary["fx_errors"])
+    return reports, paths
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=["simulated", "live"], default="simulated")
@@ -92,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--cache-only", action="store_true", help="no Gateway/Yahoo/model calls in research")
+    parser.add_argument("--no-scanner", action="store_true", help="holdings-only watch universe")
+    parser.add_argument("--scanner-max-listings", type=int, default=60,
+                        help="distinct scanner listings evaluated (each costs Gateway calls)")
     args = parser.parse_args(argv)
 
     now = datetime.now(timezone.utc)
@@ -121,7 +158,19 @@ def main(argv: list[str] | None = None) -> int:
             for note in notes:
                 print(f"  {symbol}: {note}")
 
-        reports = write_scanner_placeholders(args.output_directory / "scanner_placeholder")
+        directory = directory_from_version(version)
+        scanner = None
+        if args.no_scanner:
+            reports = write_scanner_placeholders(args.output_directory / "scanner_placeholder")
+        else:
+            scanner, reports = run_scanner(session, version, args.output_directory / "scanner", as_of=now,
+                                           max_listings=args.scanner_max_listings)
+            skipped = merge_scanner_refs(directory, scanner.instrument_refs)
+            if skipped:
+                print("scanner tickers already bound to another conid:", skipped)
+        max_hypotheses = args.max_hypotheses
+        if max_hypotheses is None and scanner is not None:
+            max_hypotheses = DEFAULT_SCANNER_MAX_HYPOTHESES
         configuration = Stage4RuntimeConfiguration(
             database_path=str(args.db),
             portfolio_snapshot_id=analysis.snapshot.snapshot_id,
@@ -132,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             watch_output_directory=str(args.output_directory / "watch_universe"),
             model_name=args.model,
             timeout_seconds=args.timeout_seconds,
-            max_hypotheses=args.max_hypotheses,
+            max_hypotheses=max_hypotheses,
             evidence_source="ibkr",
             ibkr_gateway_port=args.port,
             ibkr_gateway_recording_path=str(args.gateway_recording) if args.gateway_recording else None,
@@ -141,7 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             portfolio_file=analysis.snapshot.source_file,
             portfolio_file_fingerprint=analysis.snapshot.source_file_hash,
             account_state_id=analysis.account_state_id,
-            scanner_configuration_id="stage5-first-e2e-holdings-only-v1",
+            scanner_configuration_id=("stage5-first-e2e-holdings-only-v1" if scanner is None
+                                      else f"stage5-{DEFAULT_PLAN.plan_id}-v{DEFAULT_PLAN.version}"),
             scanner_configuration_fingerprint=configuration.fingerprint,
             as_of=now,
             mode=Stage4Mode.CACHE_ONLY if args.cache_only else Stage4Mode.PREFER_CACHE,
@@ -149,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = CanonicalStage4Runtime(
             configuration,
             portfolio_positions=analysis.positions,
-            instrument_directory=directory_from_version(version),
+            instrument_directory=directory,
             gateway_session=session,
         )
         store = Stage4E2EStore(args.db)
@@ -164,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
             "request": request.model_dump(mode="json"),
             "history_failures": analysis.history_failures,
             "history_notes": {k: list(v) for k, v in analysis.history_notes.items()},
+            "scanner": scanner.summary if scanner is not None else None,
             "run": run.model_dump(mode="json"),
             "stages": [value.model_dump(mode="json") for value in store.list_stages(run.run_id)],
             "stage_attempts": [value.model_dump(mode="json") for value in attempts],
