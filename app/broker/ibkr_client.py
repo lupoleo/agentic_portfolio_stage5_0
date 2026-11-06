@@ -93,6 +93,14 @@ class BrokerResponseError(BrokerClientError):
     """Raised when a response does not have the expected shape."""
 
 
+class BrokerNoDataError(BrokerClientError):
+    """The connector answered that it has no data for the request (e.g. themes of an ETF).
+
+    Transports raise it for the connector's "No data is available" error so
+    callers can treat it as an empty answer instead of an outage.
+    """
+
+
 class IbkrToolTransport(Protocol):
     """Calls one IBKR connector tool and returns its JSON object result."""
 

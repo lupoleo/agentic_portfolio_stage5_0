@@ -5,11 +5,12 @@
 | Field | Value |
 | --- | --- |
 | Role | Design proposal for the Stage 5.0 major release. Review before any code is written |
-| Status | APPROVED by Paolo 2026-11-06 — revision 3; implementation in progress (§8) |
+| Status | APPROVED by Paolo 2026-11-06 — revision 4; implementation in progress (§8) |
 | Date | 2026-11-04 |
 | Revision 1 | Live IBKR portfolio: no file import of any kind; versioned snapshots on every broker-side change; change-driven, minimal re-computation (§5A). Supersedes the original draft where they differ |
 | Revision 2 | No persisted instrument catalog: tradable instruments are discovered live from IBKR per stock and filtered by the account profile (trading permissions, IBKR entity and country, flow type). New Account Profile and Instrument Availability components (§5B). Instrument-reference, proxy and symbol-mapping modules retired |
 | Revision 3 | TEMPORARY simulated portfolio for tests and E2E while the Fineco → IBKR transfer of the US stocks is pending (§5C). Architecture approved |
+| Revision 4 | Evidence source strategy approved by Paolo 2026-11-06 after a coverage check on all 26 Fineco holdings: IBKR primary, IB Gateway news for daily headlines, Yahoo kept as a declared secondary source for analysts and fundamentals; ISIN-keyed contract resolution (§5D). Closes decision 1 (G1) and revises G3 |
 | Source baseline | `lupoleo/agentic_portfolio_stage4_0` at `afca47d` (AI-8C.2-R5 merged), `STAGE_4_0_ARCHITECTURE.md` |
 | Project form | New standalone repository and folder (`agentic_portfolio_stage5_0`), not a branch of 4.0 |
 | Product | Aleph Innovation product portfolio |
@@ -35,7 +36,9 @@ Only three things change, all at provider boundaries:
    (§5B).
 2. **External data and news:** Yahoo Finance (news, history, fundamentals,
    analyst targets), EODHD (universe) and ECB (FX) → IBKR data wherever IBKR
-   offers it. Gaps are listed in §7.
+   offers it. Where IBKR has no equivalent (daily headlines outside IB
+   Gateway, analyst ratings, financial statements) Yahoo stays as a declared
+   secondary source (§5D). Gaps are listed in §7.
 3. **LLM:** local Ollama `qwen3:8b` → Claude through the Anthropic API.
 
 ---
@@ -195,10 +198,10 @@ new provider underneath, **REPLACE** = new module behind the same interface,
 | --- | --- | --- | --- | --- |
 | `YahooMarketEvidenceProvider` | Yahoo history | `IbkrMarketEvidenceProvider` | `get_price_history`, `get_price_snapshot` (`change`, `misc_statistics`, `historical_vol`, `cumulative_perf_*`, `avg_90d_usd_volume`) | Full |
 | `technical_evidence_adapter.py`, `canonical_technical.py` | Computed in Python | **KEEP** | — | Full |
-| `YahooNewsEvidenceProvider` (ticker feed, symbol search, name search, AI-8C.2-R4) | Yahoo news | `IbkrEventEvidenceProvider` (channel `NEWS` kept for contract compatibility) | `search_earnings_insights` + `get_earnings_insight` (preview/recap titles, guidance, risk updates, citations); `get_company_connections` with `link_info` (evidence text) | Earnings-centred only; nothing between reporting dates; ENEL returned no insight (G1) |
-| `news_relevance.py` | LLM relevance on headlines | **KEEP** contract; input becomes insight sections | — | — |
-| `YahooFundamentalEvidenceProvider` | Yahoo `info` ratios and statements | `IbkrFundamentalEvidenceProvider` | Earnings recap: estimates vs actuals, KPIs, guidance; `get_price_snapshot` `dividend_yield`; screener fundamental filters where exposed | No structured P/E, margins, balance sheet via the connector (G3) |
-| `YahooAnalystEvidenceProvider` (price targets, expectations projection) | Yahoo targets | `IbkrAnalystEvidenceProvider` | Earnings preview: analyst price targets, bull/base/bear scenarios, estimates | Only when a preview exists (G3) |
+| `YahooNewsEvidenceProvider` (ticker feed, symbol search, name search, AI-8C.2-R4) | Yahoo news | `IbkrEventEvidenceProvider` (earnings channel) + `IbkrNewsEvidenceProvider` (headline channel, IB Gateway) + `YahooNewsEvidenceProvider` kept as secondary (§5D) | `search_earnings_insights` + `get_earnings_insight`; IB Gateway `reqNewsProviders` / `reqHistoricalNews` / `reqNewsArticle` | Insights: US only and lagging; headlines: providers enabled on the account; Yahoo fills names IBKR does not cover (G1) |
+| `news_relevance.py` | LLM relevance on headlines | **KEEP** contract; input is IBKR headlines, insight sections and secondary Yahoo headlines | — | — |
+| `YahooFundamentalEvidenceProvider` | Yahoo `info` ratios and statements | **KEEP as secondary** + `IbkrFundamentalEvidenceProvider` (primary when it has data) | Earnings recap: estimates vs actuals, KPIs, guidance; `get_price_snapshot` `dividend_yield` | Connector has no statements or ratios (G3) |
+| `YahooAnalystEvidenceProvider` (price targets, expectations projection) | Yahoo targets | **KEEP as secondary** + `IbkrAnalystEvidenceProvider` (primary when a preview exists) | Earnings preview: analyst targets, scenarios, estimates | Previews exist only for covered US names (G3) |
 | — (new, optional) | — | `IbkrThemeEvidenceProvider` | `get_company_themes`, `get_company_connections` | New context evidence (sector, peers, competitors, geography). Feeds research context only, never scores directly |
 | `evidence_aggregator.py`, `evidence_quality*.py`, `evidence_semantics.py` | Aggregation, quality, semantic tags | **KEEP**; new provider names and freshness rules for insight evidence | — | — |
 
@@ -449,6 +452,54 @@ NBIS 88819736, META 107113386, GOOGL 208813719, PLTR 444857009, MSTR 272110
 
 ---
 
+## 5D. Evidence source strategy (new in revision 4, approved 2026-11-06)
+
+### 5D.1 Coverage measured on the live connector
+
+Checked read-only on 2026-11-06 for all 26 holdings of the Fineco export
+(the per-holding report stays outside the repository with the other personal data):
+
+| Group (share of value) | Contract found | Earnings insights | Themes / connections |
+| --- | --- | --- | --- |
+| US stocks, 12 (44%) | 12/12 | 10/12 (none for NBIS, SPCX); the late-October 2026 quarter mostly missing | yes |
+| Italian stocks, 3 (5%) | 3/3 | 0/3 | generic for PST and UNI (US peers); none for LUVE |
+| UCITS ETF and ETC, 11 (52%) | 11/11, several only by ISIN | n/a | no data |
+
+The connector has no daily headlines, analyst ratings or financial
+statements for any market.
+
+### 5D.2 Source per evidence need
+
+| Need | Primary | Secondary (declared) |
+| --- | --- | --- |
+| Positions, cash, prices, history, FX | IBKR connector | — |
+| Earnings context | IBKR earnings insights | Yahoo news |
+| Business profile, peers, geography | IBKR themes and connections | — |
+| Daily headlines (all markets) | IBKR news through IB Gateway: the providers enabled on the account (Briefing.com, Dow Jones, MarketWatch, plus any EU/Italian feed available) | Yahoo news |
+| Analyst ratings and targets, fundamentals | IBKR insight preview/recap when present | Yahoo analyst and fundamental providers |
+| ETF / ETC | IBKR market data only (performance, volatility, NAV); no news or LLM relevance step | — |
+
+### 5D.3 Rules
+
+- **Precedence.** For each channel the primary provider runs first. The
+  secondary runs only when the primary returns nothing usable for that
+  instrument or is unavailable; it never overrides primary evidence.
+- **Provenance.** Every `EvidenceItem` keeps its `source` (`IBKR`,
+  `IBKR_NEWS`, `YAHOO`), and the research prompt and the run manifest show
+  which channels were filled by a secondary source. Secondary evidence
+  carries the same freshness rules and never counts as corroboration of
+  itself.
+- **Identity.** Instruments are resolved by ISIN plus a preferred exchange
+  (the listing actually held, else the primary listing). Fineco tickers are
+  never used as identifiers; the Yahoo symbol, when a secondary call is
+  needed, is derived from the resolved IBKR listing and recorded with it.
+- **No invention.** An empty channel stays `UNAVAILABLE`, exactly as in 4.0;
+  missing components lower confidence and are never filled by the model.
+- **Network.** Yahoo calls run only on the operator's PC (the cloud
+  environment blocks them); offline tests use recorded responses.
+
+---
+
 ## 6. Contract versioning in 5.0
 
 - All frozen 4.0 business contracts (PF-1, S2.2A–H, AI-8C.2 v4, AI-8C.3 v3)
@@ -466,9 +517,9 @@ NBIS 88819736, META 107113386, GOOGL 208813719, PLTR 444857009, MSTR 272110
 
 | # | Gap | Impact | Proposed handling |
 | --- | --- | --- | --- |
-| G1 | **No news feed in the IBKR connector.** Only earnings previews/recaps and theme/connection evidence. ENEL (BVME) returned no earnings insight | Research loses non-earnings events (M&A, regulatory, guidance changes between quarters); European names may have no event evidence at all | (a) Default: treat earnings insights + themes as the NEWS channel and mark the channel `UNAVAILABLE` when empty, as 4.0 already does on outage. (b) Optional add-on, still IBKR-only: IBKR TWS / Client Portal API news (`reqHistoricalNews`) with the free Briefing.com / Dow Jones feeds included in the IBKR account. Needs IB Gateway running locally. **Decision needed** |
+| G1 | **No news feed in the IBKR connector.** Earnings insights are US-only and lag; Italian names and ETFs have none (§5D.1) | Research would lose non-earnings events and all non-US event evidence | **Decided 2026-11-06 (§5D):** IBKR insights and themes primary; daily headlines from IB Gateway news; Yahoo news as declared secondary; empty channel stays `UNAVAILABLE` |
 | G2 | **Universe size.** `preview_screener` returns at most 50 rows per run; no full exchange symbol list | The 4.0 universe of ~31.8k listings cannot be reproduced through the connector | Universe = deterministic set of screener runs (per venue location × industry, fixed sort, fixed version) + theme peers of held positions; persisted as a universe acquisition run with its query plan. Smaller but auditable. Optionally keep EODHD only for listing discovery. **Decision needed** |
-| G3 | **Fundamentals and analyst targets** only arrive inside earnings insights (US-heavy coverage) | FUNDAMENTAL and EXPECTATIONS scoring components become `UNAVAILABLE` for uncovered names | Keep 4.0 behaviour: missing components lower score confidence, never fabricated. Measure coverage per venue in the first live pilot |
+| G3 | **Fundamentals and analyst targets** are not exposed by the connector except inside earnings insights (US-only) | FUNDAMENTAL and EXPECTATIONS components would be `UNAVAILABLE` for most names | **Decided 2026-11-06 (§5D):** IBKR insight data first, Yahoo analyst and fundamental providers as declared secondary; still `UNAVAILABLE` when both are empty |
 | G4 | **Market-data subscriptions.** `get_price_snapshot` returns realtime or delayed data per subscription; non-US venues may be delayed | Freshness gates may block European candidates | Use daily bars from `get_price_history` for all gates (completed sessions only); snapshot used only for context. Record `top_status` |
 | G5 | **Calling the IBKR connector from Python** (OAuth, rate limits, session lifetime) is undocumented for non-Claude clients beyond "connect from any MCP client" | Core feasibility risk for §4.1 | First implementation step is a spike: authenticate, call `get_account_positions` and `get_price_history` from Python, measure rate limits. Fallback: TWS API through IB Gateway |
 | G6 | **FX** from IBKR `CASH` bars instead of ECB reference rates | Slightly different rates (market close vs ECB fixing) | New FX provider version; same exact-date rule |
@@ -500,10 +551,14 @@ Each step closes with tests and a short checkpoint document, as in 4.0.
    refused by the client before the request is sent.
 5. **S5.0-2b Change propagation.** Recompute planner, supersede/re-bind rules,
    execution reconciliation (§5A.4–5A.5).
-6. **S5.0-3 ClaudeProvider.** Drop-in for `AIModelProvider`; re-run the 4.0
-   research/scoring contract tests and a bounded live comparison on 3–5 names.
-7. **S5.0-4 Evidence providers on IBKR.** Market, event (earnings insight),
-   fundamental, analyst, theme; coverage report per venue (G1, G3).
+6. **S5.0-3 ClaudeProvider — DONE 2026-11-06** (PR #2, `docs/S5.0-3-CLAUDE-PROVIDER.md`;
+   first live call verified on the operator's PC). Bounded live comparison on
+   3–5 names follows with S5.0-4.
+7. **S5.0-4 Evidence providers (§5D).** ISIN-keyed contract resolver;
+   IBKR market, event (earnings insight) and theme providers; IB Gateway
+   news provider (needs the S5.0-1 spike); Yahoo news, analyst and
+   fundamental providers kept as declared secondaries with precedence and
+   provenance rules; coverage report per venue.
 8. **S5.0-5 Scanner on IBKR.** Screener universe (conids native), history
    quality, FX (G2, G4, G6).
 9. **S5.0-6 PF-1 re-base (G7)** as an explicit contract revision.
@@ -514,8 +569,9 @@ Each step closes with tests and a short checkpoint document, as in 4.0.
 
 ## 9. Decisions (Paolo approved the review on 2026-11-06; items 1–5 proceed with the recommended option unless he says otherwise)
 
-1. **News (G1):** accept earnings insights + themes as the only IBKR "news",
-   or also add IBKR API news through IB Gateway?
+1. ~~**News (G1)**~~ — **decided 2026-11-06:** IBKR primary, IB Gateway
+   news for daily headlines, Yahoo as declared secondary for news, analysts
+   and fundamentals (§5D).
 2. **Universe (G2):** IBKR screener-only universe, or keep EODHD just for
    listing discovery?
 3. **PF-1 limits (G7):** express them as fractions of live NLV so they
