@@ -41,7 +41,7 @@ from app.e2e.stage4_runtime import CanonicalStage4Runtime, Stage4RuntimeConfigur
 from app.e2e.stage4_service import Stage4E2EService
 from app.e2e.stage4_store import Stage4E2EStore
 from app.e2e.stage5_portfolio import analyze_account_version, directory_from_version
-from app.scanner.ibkr_universe import DEFAULT_PLAN, acquire_universe, build_scanner_reports
+from app.scanner.ibkr_universe import DEFAULT_PLAN, ScannerReports, acquire_universe, build_scanner_reports
 
 DEFAULT_OUTPUT = Path("data/cache/e2e/stage5/first_e2e")
 
@@ -127,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--cache-only", action="store_true", help="no Gateway/Yahoo/model calls in research")
     parser.add_argument("--no-scanner", action="store_true", help="holdings-only watch universe")
+    parser.add_argument("--reuse-scanner", type=Path, nargs="?", const=DEFAULT_OUTPUT / "scanner",
+                        help="reuse the scanner reports saved by a previous run (default: the last run's "
+                             "<output>/scanner) instead of scanning again")
     parser.add_argument("--scanner-max-listings", type=int, default=60,
                         help="distinct scanner listings evaluated at most (each costs Gateway calls)")
     parser.add_argument("--scanner-candidates", type=int,
@@ -169,9 +172,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if max_hypotheses is None:
                 max_hypotheses = DEFAULT_SCANNER_MAX_HYPOTHESES
-            candidates = args.scanner_candidates or max(1, max_hypotheses // 2)
-            scanner, reports = run_scanner(session, version, args.output_directory / "scanner", as_of=now,
-                                           max_listings=args.scanner_max_listings, max_candidates=candidates)
+            if args.reuse_scanner is not None:
+                scanner = ScannerReports.load(args.reuse_scanner)
+                reports = {name: str(args.reuse_scanner / name)
+                           for name in ("eligibility.json", "mapping.json", "history.json")}
+                print(f"scanner: REUSED {args.reuse_scanner} (acquired_at={scanner.summary.get('acquired_at')}) "
+                      f"candidates={[ref.ticker for ref in scanner.instrument_refs]}")
+            else:
+                candidates = args.scanner_candidates or max(1, max_hypotheses // 2)
+                scanner, reports = run_scanner(session, version, args.output_directory / "scanner", as_of=now,
+                                               max_listings=args.scanner_max_listings, max_candidates=candidates)
             skipped = merge_scanner_refs(directory, scanner.instrument_refs)
             if skipped:
                 print("scanner tickers already bound to another conid:", skipped)
