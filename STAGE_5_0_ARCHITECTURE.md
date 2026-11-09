@@ -542,6 +542,8 @@ statements for any market.
 | Daily headlines (all markets) | IBKR news through IB Gateway: the providers enabled on the account (Briefing.com, Dow Jones, MarketWatch, plus any EU/Italian feed available) | Yahoo news |
 | Analyst ratings and targets, fundamentals | IBKR insight preview/recap when present | Yahoo analyst and fundamental providers |
 | ETF / ETC | IBKR market data only (performance, volatility, NAV); no news or LLM relevance step | — |
+| Market and sector context | IB Gateway daily bars of benchmark and sector ETF proxies (relative performance) | — |
+| Macro context (rates, dollar, FX), added 2026-11-09 | IB Gateway daily bars: Treasury bond ETFs (IEF, TLT), dollar index ETF (UUP), EUR/USD; one item per run, fail-soft. Without it the MACRO coverage dimension was always empty (coverage 5/6) | — |
 
 ### 5D.3 Rules
 

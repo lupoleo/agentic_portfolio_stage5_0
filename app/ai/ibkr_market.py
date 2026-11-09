@@ -16,7 +16,7 @@ from hashlib import sha256
 import pandas as pd
 
 from app.ai.canonical_technical import canonical_technical_from_history
-from app.ai.ibkr_market_context import MarketContextBuilder
+from app.ai.ibkr_market_context import MacroContextBuilder, MarketContextBuilder
 from app.ai.market_evidence_provider import YahooMarketEvidenceProvider
 from app.broker.gateway import GatewaySession, history_with_listing_fallback
 from app.broker.instrument_directory import InstrumentDirectory
@@ -61,10 +61,12 @@ class IbkrHistoryLoader:
 class IbkrMarketEvidenceProvider(YahooMarketEvidenceProvider):
     """4.0 market facts computed on IBKR history, labelled as IBKR."""
 
-    def __init__(self, loader: IbkrHistoryLoader, context: MarketContextBuilder | None = None) -> None:
+    def __init__(self, loader: IbkrHistoryLoader, context: MarketContextBuilder | None = None,
+                 macro: MacroContextBuilder | None = None) -> None:
         super().__init__(history_loader=loader)
         self._loader = loader
         self._context = context
+        self._macro = macro
 
     @property
     def provider_name(self) -> str:
@@ -89,6 +91,10 @@ class IbkrMarketEvidenceProvider(YahooMarketEvidenceProvider):
             context_item = self._context_item(request.ticker, items[0])
             if context_item is not None:
                 items.append(context_item)
+        if items and self._macro is not None:
+            macro_item = self._macro_item(request.ticker, items[0])
+            if macro_item is not None:
+                items.append(macro_item)
         return result.model_copy(update={"items": items, "metadata": {**result.metadata, "source": "IBKR"}})
 
     def _context_item(self, ticker, base):
@@ -113,6 +119,26 @@ class IbkrMarketEvidenceProvider(YahooMarketEvidenceProvider):
         })
         return base.model_copy(update={"source": source, "evidence": evidence,
                                        "metadata": {**base.metadata, "context": "MARKET_SECTOR"}})
+
+
+    def _macro_item(self, ticker, base):
+        described = self._macro.describe()
+        if described is None:
+            return None
+        text, meta = described
+        digest = sha256(text.encode()).hexdigest()[:12]
+        source_id = f"SRC-IBKRMACRO-{digest}"
+        source = base.source.model_copy(update={
+            "source_id": source_id,
+            "source_name": "IBKR macro context (Treasury and dollar ETF proxies, EUR/USD; IB Gateway daily bars)",
+            "metadata": {"ticker": ticker, "source": "IBKR", **meta},
+        })
+        evidence = base.evidence.model_copy(update={
+            "evidence_id": f"EVID-IBKRMACRO-{ticker}-{digest}", "text": text,
+            "metadata": {"provider": PROVIDER_NAME, "source_id": source_id, "context": "MACRO"},
+        })
+        return base.model_copy(update={"source": source, "evidence": evidence,
+                                       "metadata": {**base.metadata, "context": "MACRO"}})
 
 
 def ibkr_canonical_technical_loader(loader: IbkrHistoryLoader):

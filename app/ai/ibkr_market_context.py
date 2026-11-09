@@ -155,3 +155,70 @@ class MarketContextBuilder:
         if relative:
             text += f" Relative performance of {ticker}: " + "; ".join(relative) + "."
         return text, meta
+
+
+# --- Macro context (2026-11-09) ----------------------------------------------------------
+# Research coverage counts six dimensions; no channel carried MACRO (rates,
+# dollar, FX), so coverage was 5/6 on every candidate. One deterministic item,
+# the same for every ticker of a run: US Treasury yields through bond ETF
+# proxies (prices move inversely to yields), the dollar index proxy and the
+# EUR/USD exchange rate, all from IB Gateway daily bars (read-only).
+MACRO_PROXIES = (
+    ("US Treasury yields, 7-10y (bond ETF price, inverse to yields)",
+     Proxy("IEF", "NASDAQ", "USD", "iShares 7-10 Year Treasury Bond ETF")),
+    ("US Treasury yields, 20y+ (bond ETF price, inverse to yields)",
+     Proxy("TLT", "NASDAQ", "USD", "iShares 20+ Year Treasury Bond ETF")),
+    ("US dollar index", Proxy("UUP", "ARCA", "USD", "Invesco DB US Dollar Index Bullish Fund")),
+)
+_ALT_PRIMARY = {"NASDAQ": ("NASDAQ", "ARCA"), "ARCA": ("ARCA", "NYSE")}
+
+
+class MacroContextBuilder:
+    """One MACRO context text per run (cached); proxies that cannot be read are left out."""
+
+    def __init__(self, session: GatewaySession, *, duration: str = "1 Y") -> None:
+        self._session = session
+        self._duration = duration
+        self._built = False
+        self._value: tuple[str, dict] | None = None
+
+    def _proxy_close(self, proxy: Proxy) -> pd.Series | None:
+        for primary in _ALT_PRIMARY.get(proxy.primary_exchange, (proxy.primary_exchange,)):
+            try:
+                conid = self._session.resolve_stock(proxy.symbol, primary, proxy.currency)
+                bars = self._session.daily_history(conid, "SMART", duration=self._duration)
+            except (BrokerClientError, BrokerNoDataError):
+                continue
+            return pd.Series([b.close for b in bars], index=[b.day for b in bars], dtype=float).dropna()
+        return None
+
+    def _eurusd(self) -> pd.Series | None:
+        try:
+            bars = self._session.fx_daily_history("USD", duration=self._duration)
+        except (BrokerClientError, BrokerNoDataError):
+            return None
+        return pd.Series([b.close for b in bars], index=[b.day for b in bars], dtype=float).dropna()
+
+    def describe(self) -> tuple[str, dict] | None:
+        if self._built:
+            return self._value
+        self._built = True
+        lines, used = [], []
+        for label, proxy in MACRO_PROXIES:
+            series = self._proxy_close(proxy)
+            if series is None or len(series) < 6:
+                continue
+            text, _ = _describe(label, proxy, series)
+            lines.append(text)
+            used.append(proxy.symbol)
+        fx = self._eurusd()
+        if fx is not None and len(fx) >= 6:
+            rets = _returns(fx)
+            lines.append(f"EUR/USD exchange rate {float(fx.iloc[-1]):.4f} USD per EUR: "
+                         + ", ".join(f"{n}-session {r:+.2f}%" for n, r in rets.items()) + ".")
+            used.append("EUR.USD")
+        if not lines:
+            return None
+        text = ("Macro context (IB Gateway daily bars; interest rates and currency): " + " ".join(lines))
+        self._value = (text, {"proxies": used})
+        return self._value
