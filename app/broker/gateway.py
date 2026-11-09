@@ -329,6 +329,20 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _per_currency(values, tag: str) -> dict[str, float | None]:
+    """Per-currency values of ``tag``. IB Gateway reports cash and FX rates
+    as ``$LEDGER-<tag>`` (account updates); a plain ``<tag>`` wins when present."""
+
+    out: dict[str, float | None] = {}
+    for v in values:
+        if v.tag == f"$LEDGER-{tag}" and v.currency:
+            out.setdefault(v.currency, _number(v.value))
+    for v in values:
+        if v.tag == tag and v.currency:
+            out[v.currency] = _number(v.value)
+    return out
+
+
 def account_snapshot_from_values(values, portfolio, trades, details) -> dict:
     """Connector-shaped account responses from ib_async account values, portfolio
     items, open trades and per-conid contract details (pure, testable)."""
@@ -341,8 +355,8 @@ def account_snapshot_from_values(values, portfolio, trades, details) -> dict:
         key = SUMMARY_TAGS.get(v.tag)
         if key and v.currency in (base, ""):
             summary[key] = _number(v.value)
-    cash = {v.currency: _number(v.value) for v in values if v.tag == "CashBalance" and v.currency}
-    rates = {v.currency: _number(v.value) for v in values if v.tag == "ExchangeRate" and v.currency}
+    cash = _per_currency(values, "CashBalance")
+    rates = _per_currency(values, "ExchangeRate")
     balances = [{"currency": cur, "cash_balance": amount or 0.0, "exchange_rate": rates.get(cur) or (1.0 if cur in (base, "BASE") else None)}
                 for cur, amount in sorted(cash.items())]
     positions = []
