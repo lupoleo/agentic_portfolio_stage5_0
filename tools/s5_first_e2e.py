@@ -95,7 +95,7 @@ def merge_scanner_refs(directory, refs) -> list[str]:
     return skipped
 
 
-def run_scanner(session, version, output: Path, *, as_of, max_listings, max_candidates):
+def run_scanner(session, version, output: Path, *, as_of, max_listings, max_candidates, require_uptrend=True):
     held = frozenset(p.conid for p in version.reading.positions if getattr(p, "conid", None))
     acquisition = acquire_universe(session, DEFAULT_PLAN, now=as_of)
     failed = [s for s in acquisition.scans if s.error]
@@ -104,7 +104,7 @@ def run_scanner(session, version, output: Path, *, as_of, max_listings, max_cand
     for scan in failed:
         print(f"  scan {scan.query.location} {scan.query.scan_code}: {scan.error}")
     reports = build_scanner_reports(session, acquisition, as_of=as_of, max_listings=max_listings,
-                                    max_candidates=max_candidates, exclude_conids=held, progress=lambda line: print("  " + line))
+                                    max_candidates=max_candidates, require_uptrend=require_uptrend, exclude_conids=held, progress=lambda line: print("  " + line))
     paths = reports.write(output)
     print("scanner_counts:", reports.summary["counts"])
     if reports.summary["fx_errors"]:
@@ -127,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--cache-only", action="store_true", help="no Gateway/Yahoo/model calls in research")
     parser.add_argument("--no-scanner", action="store_true", help="holdings-only watch universe")
+    parser.add_argument("--scanner-any-trend", action="store_true",
+                        help="also admit candidates whose close is below the 50-session average")
     parser.add_argument("--reuse-scanner", type=Path, nargs="?", const=DEFAULT_OUTPUT / "scanner",
                         help="reuse the scanner reports saved by a previous run (default: the last run's "
                              "<output>/scanner) instead of scanning again")
@@ -181,7 +183,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 candidates = args.scanner_candidates or max(1, max_hypotheses // 2)
                 scanner, reports = run_scanner(session, version, args.output_directory / "scanner", as_of=now,
-                                               max_listings=args.scanner_max_listings, max_candidates=candidates)
+                                               max_listings=args.scanner_max_listings, max_candidates=candidates,
+                                               require_uptrend=not args.scanner_any_trend)
             skipped = merge_scanner_refs(directory, scanner.instrument_refs)
             if skipped:
                 print("scanner tickers already bound to another conid:", skipped)

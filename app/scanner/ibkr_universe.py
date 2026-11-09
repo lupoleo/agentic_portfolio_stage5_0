@@ -115,8 +115,13 @@ def _plan_queries(locations: Sequence[str], scan_codes: Sequence[str]) -> tuple[
 # Venues verified with the S5.0-5 spikes on 2026-11-06: scanner rows and
 # daily history permitted with no extra market-data subscription.
 DEFAULT_LOCATIONS = ("STK.US.MAJOR", "STK.EU.IBIS", "STK.EU.SBF", "STK.EU.AEB", "STK.EU.BVME", "STK.EU.LSE")
-DEFAULT_SCAN_CODES = ("MOST_ACTIVE", "TOP_PERC_GAIN", "HOT_BY_VOLUME")
-DEFAULT_PLAN = ScanPlan("ibkr-scanner-universe", "1", _plan_queries(DEFAULT_LOCATIONS, DEFAULT_SCAN_CODES))
+# v2 (2026-11-09): opportunity-oriented scans first. Near 52-week / 13-week highs
+# find established up-trends; hot-by-volume finds unusual volume; the day's
+# gainers and most-active names stay as confirmation. A listing found by
+# several scans ranks first (confluence), see ``acquire_universe``.
+DEFAULT_SCAN_CODES = ("HIGH_VS_52W_HL", "HIGH_VS_13W_HL", "HOT_BY_VOLUME", "TOP_PERC_GAIN", "MOST_ACTIVE")
+DEFAULT_PLAN = ScanPlan("ibkr-scanner-universe", "2", _plan_queries(DEFAULT_LOCATIONS, DEFAULT_SCAN_CODES))
+TREND_SMA_SESSIONS = 50
 
 
 @dataclass(frozen=True)
@@ -167,7 +172,8 @@ def acquire_universe(session: GatewaySession, plan: ScanPlan = DEFAULT_PLAN, *,
         (UniverseListing(conid, e["row"].symbol, e["row"].exchange.upper(), e["row"].currency.upper(), e["rank"],
                          tuple(sorted(e["sources"])))
          for conid, e in by_conid.items()),
-        key=lambda item: (item.best_rank, -len(item.sources), item.conid),
+        # Confluence first: a listing several scans agree on, then the best single rank.
+        key=lambda item: (-len(item.sources), item.best_rank, item.conid),
     )
     return UniverseAcquisition(plan, acquired_at, tuple(outcomes), tuple(listings))
 
@@ -301,6 +307,13 @@ class ScannerReports:
         return paths
 
 
+def _above_sma(bars, sessions: int) -> bool:
+    closes = [b.close for b in bars if b.close and b.close > 0]
+    if len(closes) < sessions:
+        return False
+    return closes[-1] > sum(closes[-sessions:]) / sessions
+
+
 def build_scanner_reports(
     session: GatewaySession,
     acquisition: UniverseAcquisition,
@@ -310,6 +323,7 @@ def build_scanner_reports(
     history_days: int = 370,
     max_listings: int | None = None,
     max_candidates: int | None = None,
+    require_uptrend: bool = False,
     exclude_conids: frozenset[int] = frozenset(),
     calendar_factory: CalendarFactory | None = None,
     progress: Callable[[str], None] | None = None,
@@ -317,6 +331,8 @@ def build_scanner_reports(
     """Eligibility, mapping and history-quality reports for the acquired universe.
 
     ``max_listings`` bounds the Gateway calls (best scanner rank first);
+    ``require_uptrend`` drops STANDARD listings whose last close is not above
+    the 50-session average (they never count as candidates);
     ``max_candidates`` stops once that many listings reach the STANDARD
     history route, so research spends its budget on the best-ranked names;
     listings on a venue without a session calendar (e.g. FWB secondary
@@ -416,6 +432,15 @@ def build_scanner_reports(
             )
             record["quality"] = history_quality_result_to_dict(quality)
             bump(f"history_route:{quality.route.value}")
+            if require_uptrend and quality.route.value == "STANDARD" and not _above_sma(bars, TREND_SMA_SESSIONS):
+                # Not a candidate: drop its rows so it does not reach the watch universe.
+                bump(f"trend:below_sma{TREND_SMA_SESSIONS}")
+                decisions.pop()
+                mappings.pop()
+                refs.pop()
+                if progress:
+                    progress(f"{symbol}: skipped, close below SMA{TREND_SMA_SESSIONS}")
+                continue
             if quality.route.value == "STANDARD":
                 standard += 1
             if progress:
