@@ -1,10 +1,10 @@
-"""Record IB Gateway data for the simulated holdings (read-only), for offline development.
+"""Record IB Gateway data for the IBKR account holdings (read-only), for offline development.
 
 Run on the operator's PC with IB Gateway logged in (Read-Only API, port 4001):
 
-    python -m tools.s5_record_gateway_fixtures [--fixture data/simulation/fineco_usd_2026-11-06.json]
+    python -m tools.s5_record_gateway_fixtures
 
-For every holding of the simulation fixture it records contract details,
+It records the account snapshot and, for every live IBKR position, contract details,
 2 years of daily bars and up to 30 recent headlines into
 ``data/recordings/gateway_fixtures_<timestamp>.json`` (git-ignored). The
 console shows only counts.
@@ -18,25 +18,26 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.broker.gateway import IbAsyncGatewaySession
 from app.broker.ibkr_client import BrokerClientError
-from app.broker.sources import SimulationFixture
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fixture", default="data/simulation/fineco_usd_2026-11-06.json")
     parser.add_argument("--port", type=int, default=4001)
     parser.add_argument("--duration", default="2 Y")
     args = parser.parse_args()
 
-    fixture = SimulationFixture.load(args.fixture)
-    out: dict = {"recorded_at": datetime.now().astimezone().isoformat(), "fixture_id": fixture.fixture_id, "instruments": {}}
+    out: dict = {"recorded_at": datetime.now().astimezone().isoformat(), "instruments": {}}
     with IbAsyncGatewaySession(port=args.port) as session:
+        out["account"] = session.account_snapshot()
         codes = session.news_providers()
         out["news_providers"] = codes
-        for h in fixture.holdings:
+        holdings = [SimpleNamespace(conid=p["contract_id"], symbol=p["contract_description"], isin=p.get("isin"))
+                    for p in out["account"]["get_account_positions"]["positions"]]
+        for h in holdings:
             entry: dict = {"symbol": h.symbol, "isin": h.isin}
             t = time.perf_counter()
             try:

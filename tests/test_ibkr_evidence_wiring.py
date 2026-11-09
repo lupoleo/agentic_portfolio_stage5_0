@@ -260,25 +260,16 @@ def test_runtime_defaults_to_4_0_sources_and_validates_the_choice(tmp_path):
         runtime_configuration(tmp_path, evidence_source="bloomberg")
 
 
-def test_runtime_builds_ibkr_channels_from_recording_and_fixture(tmp_path):
+def test_runtime_builds_ibkr_channels_from_recording_and_directory(tmp_path):
     import json
 
+    from app.broker.instrument_directory import InstrumentDirectory, InstrumentRef
     from app.e2e.stage4_runtime import CanonicalStage4Runtime
 
-    fixture = {
-        "fixture_id": "synthetic", "purpose": "test", "valid_until": "2026-12-31", "source_file": "x.xlsx",
-        "source_file_sha256": "0" * 64, "source_exported_on": "2026-11-06",
-        "holdings": [{"conid": MSFT, "symbol": "MSFT", "isin": "US5949181045", "description": "Microsoft",
-                      "listing_exchange": "NASDAQ", "currency": "USD", "quantity": 1, "average_price": 1,
-                      "market_price_at_export": 1}],
-    }
-    (tmp_path / "fixture.json").write_text(json.dumps(fixture), encoding="utf-8")
     (tmp_path / "rec.json").write_text(json.dumps(RECORDING), encoding="utf-8")
-    config = runtime_configuration(
-        tmp_path, evidence_source="IBKR", instrument_fixture_path=str(tmp_path / "fixture.json"),
-        ibkr_gateway_recording_path=str(tmp_path / "rec.json"),
-    )
-    runtime = CanonicalStage4Runtime(config)
+    config = runtime_configuration(tmp_path, evidence_source="IBKR", ibkr_gateway_recording_path=str(tmp_path / "rec.json"))
+    directory = InstrumentDirectory([InstrumentRef(ticker="MSFT", conid=MSFT, isin="US5949181045", currency="USD")])
+    runtime = CanonicalStage4Runtime(config, instrument_directory=directory)
     gateway, built = runtime._ibkr_channels(Fixed("YAHOO_MARKET", EvidenceKind.MARKET), Fixed("YAHOO_NEWS"), None, None, None)
     assert isinstance(gateway, RecordedGatewaySession)
     assert built.news.fetch(EvidenceRequest(ticker="MSFT")).items[0].source.provider == "IBKR_GATEWAY_NEWS"

@@ -1,10 +1,10 @@
-"""Check the Stage 5 research evidence channels on the simulated holdings (§5D).
+"""Check the Stage 5 research evidence channels on the IBKR account holdings (§5D).
 
 Run on the operator's PC with IB Gateway logged in (Read-Only API, port 4001):
 
     python -m tools.s5_evidence_channels_check [--recording data/recordings/gateway_fixtures_<ts>.json] [--no-yahoo]
 
-For every holding of the simulation fixture it fetches the market, news,
+For every live IBKR position it fetches the market, news,
 fundamental and analyst channels and the canonical technical input exactly as
 the runtime builds them with ``evidence_source="ibkr"``: IBKR first (live
 Gateway, or a recording), Yahoo as declared secondary. Read-only; no model
@@ -20,7 +20,9 @@ from app.ai.evidence_provider import EvidenceRequest
 from app.ai.ibkr_evidence_wiring import build_ibkr_evidence_channels
 from app.broker.gateway import IbAsyncGatewaySession, RecordedGatewaySession
 from app.broker.instrument_directory import InstrumentDirectory
-from app.broker.sources import SimulationFixture
+from app.broker.account_sync import AccountSyncService
+from app.broker.sources import gateway_account_source
+from app.broker.sync_store import SyncStore
 
 
 def _channel(provider, ticker: str) -> str:
@@ -36,14 +38,12 @@ def _channel(provider, ticker: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fixture", default="data/simulation/fineco_usd_2026-11-06.json")
+    parser.add_argument("--sync-db", default="data/state/stage5_account_sync.db")
     parser.add_argument("--recording", help="replay a Gateway recording instead of the live Gateway")
     parser.add_argument("--port", type=int, default=4001)
     parser.add_argument("--no-yahoo", action="store_true", help="IBKR only, no secondary")
     args = parser.parse_args()
 
-    fixture = SimulationFixture.load(args.fixture)
-    directory = InstrumentDirectory.from_fixture(fixture)
     secondary: dict = {}
     if not args.no_yahoo:
         from app.ai.analyst_evidence_provider import YahooAnalystEvidenceProvider
@@ -59,8 +59,10 @@ def main() -> int:
         )
     session = RecordedGatewaySession(args.recording) if args.recording else IbAsyncGatewaySession(port=args.port)
     try:
+        version = AccountSyncService(gateway_account_source(session), SyncStore(args.sync_db)).sync().version
+        directory = InstrumentDirectory.from_reading(version.reading)
         channels = build_ibkr_evidence_channels(session, directory, **secondary)
-        for h in fixture.holdings:
+        for h in version.reading.positions:
             t = time.perf_counter()
             try:
                 technical = channels.canonical_technical_loader(h.symbol).trend

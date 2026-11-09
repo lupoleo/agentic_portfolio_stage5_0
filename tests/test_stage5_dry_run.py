@@ -36,9 +36,9 @@ NOW = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
 
 
 def run_part_a(tmp_path, capsys):
-    gateway, account, fixture = write_inputs(tmp_path)
+    gateway = write_inputs(tmp_path)
     code = s5_first_e2e.main([
-        "--gateway-recording", str(gateway), "--account-recording", str(account), "--fixture", str(fixture),
+        "--gateway-recording", str(gateway),
         "--db", str(tmp_path / "cio.db"), "--sync-db", str(tmp_path / "sync.db"),
         "--output-directory", str(tmp_path / "out"), "--cache-only", "--no-scanner",
     ])
@@ -196,11 +196,11 @@ def dry_run(tmp_path, capsys, *extra):
     ])
 
 
-def test_pf1_var_limit_blocks_an_oversized_trade(tmp_path, capsys):
+def test_pf1_limits_block_an_oversized_trade(tmp_path, capsys):
     code = dry_run(tmp_path, capsys)  # default exposure: 10% of NLV on a highly correlated name
     out = capsys.readouterr().out
     assert code == 2 and "terminal_reason: PORTFOLIO_FILTER_BLOCKED" in out
-    assert "portfolio_fit: REJECT" in out and "MAX_VAR_95_1D_EUR FAIL" in out
+    assert "portfolio_fit: REJECT" in out and "MAX_POSITION_WEIGHT_PCT FAIL" in out
     assert "execution_plan_id: None" in out and "broker_orders_submitted: 0" in out
 
 
@@ -237,7 +237,7 @@ def test_completed_dry_run_writes_one_order_instruction_request(tmp_path, capsys
     assert a.contract_id_ex == "1003" and a.side == "BUY" and a.order_type == "LIMIT" and a.time_in_force == "DAY"
     assert a.quantity >= 1 and a.limit_price == pytest.approx(193.25)
     assert request.protective_stop is not None and request.protective_stop < a.limit_price
-    assert request.simulated_state and request.requires_holder_confirmation and not request.rehearsal
+    assert request.state_origin == "REAL_IBKR" and not request.simulated_state and not request.rehearsal
     assert request.status == "PENDING_CREATION", request.blocked_reason
     assert "order_instructions_created: 0" in out and "broker_orders_submitted: 0" in out
 

@@ -96,7 +96,6 @@ class Stage4RuntimeConfiguration(Stage4Model):
     evidence_source: str = "yahoo"
     ibkr_gateway_port: int = Field(default=4001, gt=0)
     ibkr_gateway_recording_path: str | None = None  # replay a recording instead of a live Gateway
-    instrument_fixture_path: str | None = None  # TEMPORARY: simulated holdings → instrument directory
 
     @field_validator("evidence_source", mode="before")
     @classmethod
@@ -330,16 +329,12 @@ class CanonicalStage4Runtime:
     def _ibkr_channels(self, market, news, fundamental, analyst, technical_loader):
         from app.ai.ibkr_evidence_wiring import build_ibkr_evidence_channels
         from app.broker.gateway import IbAsyncGatewaySession, RecordedGatewaySession
-        from app.broker.instrument_directory import InstrumentDirectory
-        from app.broker.sources import SimulationFixture
 
         config = self.configuration
         if self.instrument_directory is not None:
             directory = self.instrument_directory
-        elif config.instrument_fixture_path:
-            directory = InstrumentDirectory.from_fixture(SimulationFixture.load(config.instrument_fixture_path))
         else:
-            raise ValueError("evidence_source='ibkr' needs an instrument directory (instrument_fixture_path)")
+            raise ValueError("evidence_source='ibkr' needs an instrument directory (from the IBKR account state)")
         if self.gateway_session is not None:
             gateway = None
             session = self.gateway_session

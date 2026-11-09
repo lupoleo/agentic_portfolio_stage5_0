@@ -17,6 +17,7 @@ Two independent locks keep it read-only:
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -99,6 +100,13 @@ class GatewaySession(Protocol):
 
     def fx_daily_history(self, currency: str, *, duration: str = "1 Y") -> list[DailyBar]:
         """Daily EUR.<currency> mid bars: close = units of ``currency`` per 1 EUR."""
+        ...
+
+    def account_snapshot(self) -> dict:
+        """The account as connector-shaped tool responses (``get_account_summary``,
+        ``get_account_balances``, ``get_account_positions``, ``get_account_orders``),
+        read through the Read-Only API: summary values, cash per currency,
+        portfolio positions and open orders."""
         ...
 
 
@@ -275,6 +283,104 @@ class IbAsyncGatewaySession:
             return ""
         return article_text(article.articleText)
 
+    def account_snapshot(self) -> dict:
+        accounts = self._ib.managedAccounts()
+        if len(accounts) != 1:
+            raise BrokerClientError(f"expected one IBKR account on the Gateway, found {len(accounts)}")
+        account = accounts[0]
+        values = self._ib.accountValues(account)
+        if not any(v.tag == "NetLiquidation" for v in values):
+            self._ib.reqAccountUpdates(account)
+            values = self._ib.accountValues(account)
+        portfolio = [p for p in self._ib.portfolio(account) if p.position]
+        details = {}
+        for item in portfolio:
+            found = self._ib.reqContractDetails(self._contract(item.contract.conId))
+            if found:
+                d = found[0]
+                isin = next((t.value for t in (d.secIdList or []) if t.tag == "ISIN"), None)
+                details[item.contract.conId] = {"isin": isin, "stock_type": getattr(d, "stockType", "") or "",
+                                                "long_name": d.longName or "",
+                                                "primary_exchange": d.contract.primaryExchange or ""}
+        notes = []
+        try:  # viewing open orders is allowed by the Read-Only API; nothing is modified
+            self._ib.reqAllOpenOrders()
+            trades = list(self._ib.openTrades())
+        except Exception as exc:  # noqa: BLE001 - positions and cash stay valid without the order list
+            trades = []
+            notes.append(f"open orders unavailable: {type(exc).__name__}: {exc}")
+        snapshot = account_snapshot_from_values(values, portfolio, trades, details)
+        snapshot["notes"] = notes
+        return snapshot
+
+
+SUMMARY_TAGS = {
+    "NetLiquidation": "net_liquidation", "EquityWithLoanValue": "equity_with_loan_value",
+    "TotalCashValue": "total_cash_value", "GrossPositionValue": "gross_position_value",
+    "AvailableFunds": "available_funds", "BuyingPower": "buying_power", "InitMarginReq": "initial_margin",
+    "MaintMarginReq": "maintenance_margin", "ExcessLiquidity": "excess_liquidity", "Leverage-S": "leverage",
+}
+
+
+def _number(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def account_snapshot_from_values(values, portfolio, trades, details) -> dict:
+    """Connector-shaped account responses from ib_async account values, portfolio
+    items, open trades and per-conid contract details (pure, testable)."""
+
+    base = next((v.currency for v in values if v.tag == "NetLiquidation" and v.currency not in ("", "BASE")), None)
+    if base is None:
+        raise BrokerNoDataError("IB Gateway returned no NetLiquidation: account updates not received")
+    summary: dict[str, Any] = {"currency": base}
+    for v in values:
+        key = SUMMARY_TAGS.get(v.tag)
+        if key and v.currency in (base, ""):
+            summary[key] = _number(v.value)
+    cash = {v.currency: _number(v.value) for v in values if v.tag == "CashBalance" and v.currency}
+    rates = {v.currency: _number(v.value) for v in values if v.tag == "ExchangeRate" and v.currency}
+    balances = [{"currency": cur, "cash_balance": amount or 0.0, "exchange_rate": rates.get(cur) or (1.0 if cur in (base, "BASE") else None)}
+                for cur, amount in sorted(cash.items())]
+    positions = []
+    for item in portfolio:
+        c = item.contract
+        if not item.position:
+            continue
+        d = details.get(c.conId) or {}
+        multiplier = _number(getattr(c, "multiplier", "")) or 1.0
+        positions.append({
+            "contract_id": c.conId,
+            "contract_description": c.symbol,
+            "description": d.get("long_name") or None,
+            "position": item.position,
+            "market_price": item.marketPrice,
+            "market_value": item.marketValue,
+            "currency": c.currency,
+            "average_price": item.averageCost / multiplier if item.averageCost else None,
+            "unrealized_pnl": item.unrealizedPNL,
+            "asset_class": "ETF" if d.get("stock_type") == "ETF" else c.secType,
+            "isin": d.get("isin"),
+            "primary_exchange": d.get("primary_exchange") or getattr(c, "primaryExchange", "") or c.exchange,
+        })
+    orders = []
+    for t in trades:
+        o, c = t.order, t.contract
+        orders.append({
+            "order_id": o.permId or o.orderId, "contract_id": c.conId, "symbol": c.symbol, "side": o.action,
+            "quantity": o.totalQuantity, "order_type": o.orderType, "limit_price": o.lmtPrice or None,
+            "stop_price": o.auxPrice or None, "time_in_force": o.tif, "status": t.orderStatus.status,
+        })
+    return {
+        "get_account_summary": summary,
+        "get_account_balances": {"balances": balances},
+        "get_account_positions": {"positions": sorted(positions, key=lambda p: p["contract_id"])},
+        "get_account_orders": {"orders": sorted(orders, key=lambda o: str(o["order_id"]))},
+    }
+
 
 @dataclass(frozen=True)
 class HistoryResult:
@@ -334,6 +440,7 @@ class RecordedGatewaySession:
         self._scans = dict(data.get("scans") or {})
         self._fx = dict(data.get("fx") or {})
         self._articles = dict(data.get("articles") or {})
+        self._account = data.get("account")
 
     def _entry(self, conid: int) -> dict:
         entry = self._instruments.get(conid)
@@ -389,6 +496,11 @@ class RecordedGatewaySession:
         if isinstance(entry, dict) and "error" in entry:
             raise BrokerClientError(entry["error"])
         return [ScannerRow(**row) for row in entry][:rows]
+
+    def account_snapshot(self) -> dict:
+        if not self._account:
+            raise BrokerNoDataError("no account snapshot in recording")
+        return json.loads(json.dumps(self._account))
 
     def fx_daily_history(self, currency: str, *, duration: str = "1 Y") -> list[DailyBar]:
         bars = self._fx.get(currency.upper())

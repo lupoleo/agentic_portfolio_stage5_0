@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from tests.test_broker_account_sync import balances, reading, summary
+from tests.test_broker_account_sync import balances, position, reading, summary
 from tools import s5_first_e2e
 
 CONIDS = {"AAA": 1001, "BBB": 1002, "CCC": 1003, "SPY": 756733}
@@ -26,6 +26,7 @@ def bars(n, start, step):
 
 
 def write_inputs(tmp_path):
+    """A Gateway recording holding the real-account snapshot (3 USD stocks, EUR base) and their bars."""
     instruments = {}
     for i, (symbol, conid) in enumerate(CONIDS.items()):
         instruments[str(conid)] = {
@@ -34,44 +35,37 @@ def write_inputs(tmp_path):
             "bars": bars(800, 50 + 10 * i, 0.05 * (i + 1)),
             "headlines": [],
         }
+    held = [position(conid=CONIDS[s], symbol=s, qty=10 * (n + 1), price=60.0, avg=40.0)
+            for n, s in enumerate(("AAA", "BBB", "CCC"))]
+    for p, s in zip(held, ("AAA", "BBB", "CCC")):
+        p["isin"] = f"US000000000{s}"
+    value_eur = sum(p["market_value"] for p in held) * 0.86
+    snap = reading(positions=held, summ=summary(nlv=6_000 + value_eur, cash=6_000, gross=value_eur),
+                   bal=balances(eur=6_000, usd=0, usd_rate=0.86))
+    snap.pop("get_flow_type")
     gateway = tmp_path / "gateway.json"
-    gateway.write_text(json.dumps({"news_providers": ["BRFG"], "instruments": instruments}), encoding="utf-8")
-    account = tmp_path / "account.json"
-    account.write_text(json.dumps({"readings": [{
-        "observed_at": "2026-11-06T10:30:00+00:00",
-        **reading(positions=[], summ=summary(nlv=6_000, cash=6_000, gross=0), bal=balances(eur=6_000, usd=0, usd_rate=0.86)),
-    }]}), encoding="utf-8")
-    fixture = tmp_path / "fixture.json"
-    fixture.write_text(json.dumps({
-        "fixture_id": "synthetic", "purpose": "test", "valid_until": "2027-03-31", "source_file": "x.xlsx",
-        "source_file_sha256": "0" * 64, "source_exported_on": "2026-11-06",
-        "holdings": [
-            {"conid": CONIDS[s], "symbol": s, "isin": f"US000000000{n}", "description": f"{s} INC",
-             "listing_exchange": "NASDAQ", "currency": "USD", "quantity": 10 * (n + 1), "average_price": 40,
-             "market_price_at_export": 60}
-            for n, s in enumerate(("AAA", "BBB", "CCC"))
-        ],
-    }), encoding="utf-8")
-    return gateway, account, fixture
+    gateway.write_text(json.dumps({"news_providers": ["BRFG"], "instruments": instruments, "account": snap}),
+                       encoding="utf-8")
+    return gateway
 
 
 def test_first_e2e_runs_from_ibkr_account_to_research_without_side_effects(tmp_path, capsys):
-    gateway, account, fixture = write_inputs(tmp_path)
+    gateway = write_inputs(tmp_path)
     code = s5_first_e2e.main([
-        "--gateway-recording", str(gateway), "--account-recording", str(account), "--fixture", str(fixture),
+        "--gateway-recording", str(gateway),
         "--db", str(tmp_path / "cio.db"), "--sync-db", str(tmp_path / "sync.db"),
         "--output-directory", str(tmp_path / "out"), "--cache-only",
     ])
     out = capsys.readouterr().out
     assert code == 0
-    assert "analyzed=3/3" in out and "origin=SIMULATED_TEMPORARY" in out
+    assert "analyzed=3/3" in out and "origin=REAL_IBKR" in out
     assert "completed_stages: ['PORTFOLIO_ANALYSIS', 'SCANNER_DISCOVERY', 'WATCH_UNIVERSE_ASSEMBLY']" in out
     assert "CACHE_ONLY_MISS=3" in out  # research ran on the three holdings, model calls disabled
     for counter in ("broker_orders_submitted", "portfolio_mutations", "automatic_executions"):
         assert f"{counter}: 0" in out
     (report_path,) = (tmp_path / "out").glob("stage5_first_e2e_*.json")
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report["request"]["portfolio_file"].startswith("ibkr://SIMULATED_FINECO_USD/")
+    assert report["request"]["portfolio_file"].startswith("ibkr://LIVE/")
     assert report["configuration"]["evidence_source"] == "ibkr"
 
 
@@ -105,7 +99,7 @@ def test_scanner_candidates_join_the_watch_universe(tmp_path, capsys):
     from app.broker.gateway import scan_key
     from app.scanner.exchange_session_calendar import ExchangeSessionCalendarProvider
 
-    gateway, account, fixture = write_inputs(tmp_path)
+    gateway = write_inputs(tmp_path)
     data = json.loads(gateway.read_text(encoding="utf-8"))
     today = datetime.now(timezone.utc).date()
     calendar = ExchangeSessionCalendarProvider().build("NASDAQ", start=today - timedelta(days=400), end=today).calendar
@@ -133,7 +127,7 @@ def test_scanner_candidates_join_the_watch_universe(tmp_path, capsys):
     gateway.write_text(json.dumps(data), encoding="utf-8")
 
     code = s5_first_e2e.main([
-        "--gateway-recording", str(gateway), "--account-recording", str(account), "--fixture", str(fixture),
+        "--gateway-recording", str(gateway),
         "--db", str(tmp_path / "cio.db"), "--sync-db", str(tmp_path / "sync.db"),
         "--output-directory", str(tmp_path / "out"), "--cache-only",
     ])
@@ -162,8 +156,7 @@ def test_saved_scanner_reports_are_reused_without_a_new_scan(tmp_path, capsys):
     data.pop("scans")  # a second scan would find nothing: the candidate must come from the saved reports
     gateway.write_text(json.dumps(data), encoding="utf-8")
     code = s5_first_e2e.main([
-        "--gateway-recording", str(gateway), "--account-recording", str(tmp_path / "account.json"),
-        "--fixture", str(tmp_path / "fixture.json"), "--db", str(tmp_path / "cio2.db"),
+        "--gateway-recording", str(gateway), "--db", str(tmp_path / "cio2.db"),
         "--sync-db", str(tmp_path / "sync2.db"), "--output-directory", str(tmp_path / "out2"),
         "--cache-only", "--reuse-scanner", str(saved),
     ])

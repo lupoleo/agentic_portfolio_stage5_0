@@ -94,11 +94,10 @@ def main() -> int:
     parser.add_argument("--output-directory", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--model", default="claude-sonnet-5-5", help="claude-* model, or ollama:<model>")
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
-    parser.add_argument("--evidence-source", choices=["yahoo", "ibkr"], default="yahoo",
-                        help="ibkr: IB Gateway history/news first, Yahoo as declared secondary (§5D)")
+    parser.add_argument("--evidence-source", choices=["yahoo"], default="yahoo",
+                        help="4.0 Fineco-file tool: Yahoo only (Stage 5 with IBKR evidence: tools.s5_first_e2e)")
     parser.add_argument("--ibkr-gateway-port", type=int, default=4001)
     parser.add_argument("--ibkr-recording", type=Path, help="replay a Gateway recording instead of a live Gateway")
-    parser.add_argument("--instrument-fixture", type=Path, help="TEMPORARY: simulated holdings for the instrument directory")
     parser.add_argument("--max-hypotheses", type=int)
     parser.add_argument("--exposure-eur", type=float)
     parser.add_argument("--max-loss-eur", type=float)
@@ -128,7 +127,6 @@ def main() -> int:
         evidence_source=args.evidence_source,
         ibkr_gateway_port=args.ibkr_gateway_port,
         ibkr_gateway_recording_path=str(args.ibkr_recording) if args.ibkr_recording else None,
-        instrument_fixture_path=str(args.instrument_fixture) if args.instrument_fixture else None,
     )
     request = Stage4E2ERequest(
         portfolio_file=str(args.portfolio_file),

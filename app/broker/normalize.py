@@ -37,6 +37,8 @@ def position_from_ibkr(raw: Mapping[str, Any]) -> BrokerPosition:
         market_price=_float(raw.get("market_price")),
         market_value=_float(raw.get("market_value")),
         unrealized_pnl=_float(raw.get("unrealized_pnl")),
+        description=(str(raw["description"]) if raw.get("description") else None),
+        isin=(str(raw["isin"]) if raw.get("isin") else None),
         origin=StateOrigin.REAL_IBKR,
     )
 
