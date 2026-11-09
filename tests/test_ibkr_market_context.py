@@ -59,3 +59,34 @@ def test_missing_sector_proxy_keeps_the_benchmark_only():
     (_, context) = provider().fetch(EvidenceRequest(ticker="KPN.AS")).items  # EXV2 is not available
     assert "(EXSA)" in context.evidence.text and "EXV2" not in context.evidence.text
     assert context.source.metadata["proxies"] == ["EXSA"]
+
+
+def test_macro_item_carries_rates_dollar_and_eurusd_and_is_tagged_macro():
+    from app.ai.evidence_semantics import EvidenceSemanticDimension, deterministic_semantic_dimensions
+    from app.ai.ibkr_market_context import MacroContextBuilder
+
+    recording = {"instruments": {
+        **RECORDING["instruments"],
+        "10": {"contract": contract(10, "IEF", "NASDAQ", "USD"), "bars": bars(start=95)},
+        "11": {"contract": contract(11, "UUP", "ARCA", "USD"), "bars": bars(start=28)},
+    }, "fx": {"USD": [{"day": b["day"], "open": 1.1, "high": 1.1, "low": 1.1, "close": 1.1 + i * 0.001}
+                      for i, b in enumerate(bars(start=1))]}}
+    session = RecordedGatewaySession(recording)
+    macro = MacroContextBuilder(session)
+    p = IbkrMarketEvidenceProvider(IbkrHistoryLoader(session, directory()), MarketContextBuilder(session, directory()), macro)
+    items = p.fetch(EvidenceRequest(ticker="ISP.MI")).items
+    item = items[-1]
+    assert item.evidence.evidence_id.startswith("EVID-IBKRMACRO-ISP.MI") and item.kind is EvidenceKind.MARKET
+    text = item.evidence.text
+    assert "(IEF)" in text and "(UUP)" in text and "EUR/USD exchange rate" in text and "TLT" not in text
+    assert item.source.metadata["proxies"] == ["IEF", "UUP", "EUR.USD"]
+    assert EvidenceSemanticDimension.MACRO in deterministic_semantic_dimensions(text)
+    assert macro.describe() is macro.describe()  # built once per run
+
+
+def test_no_macro_item_when_no_proxy_is_readable():
+    from app.ai.ibkr_market_context import MacroContextBuilder
+
+    session = RecordedGatewaySession(RECORDING)
+    p = IbkrMarketEvidenceProvider(IbkrHistoryLoader(session, directory()), None, MacroContextBuilder(session))
+    assert len(p.fetch(EvidenceRequest(ticker="ISP.MI")).items) == 1

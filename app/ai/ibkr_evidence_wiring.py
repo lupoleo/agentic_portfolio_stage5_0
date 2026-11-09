@@ -30,7 +30,7 @@ from app.ai.evidence_provider import (
     EvidenceProviderError,
     EvidenceRequest,
 )
-from app.ai.ibkr_market_context import MarketContextBuilder
+from app.ai.ibkr_market_context import MacroContextBuilder, MarketContextBuilder
 from app.ai.ibkr_market import IbkrHistoryLoader, IbkrMarketEvidenceProvider, ibkr_canonical_technical_loader
 from app.ai.ibkr_news_evidence_provider import IbkrGatewayNewsEvidenceProvider
 from app.broker.gateway import GatewaySession
@@ -175,7 +175,8 @@ def build_ibkr_evidence_channels(
 
     loader = IbkrHistoryLoader(session, directory, duration=history_duration)
     market = PrecedenceEvidenceProvider(
-        IbkrMarketEvidenceProvider(loader, MarketContextBuilder(session, directory, duration=history_duration)),
+        IbkrMarketEvidenceProvider(loader, MarketContextBuilder(session, directory, duration=history_duration),
+                                   MacroContextBuilder(session, duration=history_duration)),
         secondary_market,
     )
 
