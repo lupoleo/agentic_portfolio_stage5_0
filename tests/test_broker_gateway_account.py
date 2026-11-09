@@ -108,3 +108,13 @@ def test_gateway_source_syncs_the_real_account(tmp_path):
 def test_transport_answers_flow_type_without_the_gateway():
     transport = GatewayAccountTransport(NS(account_snapshot=lambda: pytest.fail("not read")))
     assert transport.call("get_flow_type", {}) == {"flow_type": GATEWAY_FLOW_TYPE}
+
+
+def test_ledger_tags_from_the_gateway_give_cash_per_currency():
+    ledger = [av("NetLiquidation", 9336.64), av("TotalCashValue", 6092.68),
+              av("$LEDGER-CashBalance", 6092.68, "BASE"), av("$LEDGER-CashBalance", 2995.275),
+              av("$LEDGER-CashBalance", 3466.86, "USD"), av("$LEDGER-ExchangeRate", 1, "EUR"),
+              av("$LEDGER-ExchangeRate", 0.8934333, "USD"), av("$LEDGER-TotalCashBalance", 3466.86, "USD")]
+    bal = {b["currency"]: b for b in account_snapshot_from_values(ledger, [], [], {})["get_account_balances"]["balances"]}
+    assert bal["EUR"]["cash_balance"] == 2995.275 and bal["USD"]["cash_balance"] == 3466.86
+    assert bal["USD"]["exchange_rate"] == pytest.approx(0.8934333)
