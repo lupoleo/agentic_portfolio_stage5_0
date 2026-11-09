@@ -114,8 +114,8 @@ def test_scanner_candidates_join_the_watch_universe(tmp_path, capsys):
     data["instruments"]["2001"] = {
         "contract": {"conid": 2001, "symbol": "NEWC", "exchange": "SMART", "primary_exchange": "NASDAQ",
                      "currency": "USD", "long_name": "New Candidate Inc", "sec_type": "STK", "stock_type": "COMMON"},
-        "bars": [{"day": d.isoformat(), "open": 50, "high": 51, "low": 49, "close": 50, "volume": 500_000}
-                 for d in sessions],
+        "bars": [{"day": d.isoformat(), "open": 40 + i * 0.05, "high": 41 + i * 0.05, "low": 39 + i * 0.05,
+                  "close": 40 + i * 0.05, "volume": 500_000} for i, d in enumerate(sessions)],  # up-trend
         "headlines": [],
     }
     data["scans"] = {

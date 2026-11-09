@@ -189,3 +189,37 @@ def test_venue_without_calendar_is_skipped_before_history():
     assert 3 not in session.history_calls
     assert reports.summary["counts"]["unsupported_venue:FWB2"] == 1
     assert "SAP" not in {row["symbol"] for row in reports.eligibility["all_decisions"]}
+
+
+def test_uptrend_filter_drops_listings_below_their_50_session_average():
+    session = FakeSession()
+    falling = _bars("NASDAQ")
+    falling = [DailyBar(b.day, 200 - i * 0.2, 201 - i * 0.2, 199 - i * 0.2, 200 - i * 0.2, b.volume)
+               for i, b in enumerate(falling)]
+    rising = [DailyBar(b.day, 50 + i * 0.2, 51 + i * 0.2, 49 + i * 0.2, 50 + i * 0.2, b.volume)
+              for i, b in enumerate(_bars("IBIS"))]
+    original = session.daily_history
+    session.daily_history = lambda conid, exchange, *, duration="1 Y": (
+        falling if conid == 1 else rising if conid == 3 else original(conid, exchange, duration=duration))
+    acquisition = acquire_universe(session, PLAN, now=AS_OF)
+    reports = build_scanner_reports(session, acquisition, as_of=AS_OF, require_uptrend=True)
+    symbols = {row["symbol"] for row in reports.eligibility["all_decisions"]}
+    assert "AAA" not in symbols and "SAP" in symbols  # AAA falls, SAP rises
+    assert reports.summary["counts"]["trend:below_sma50"] >= 1
+    assert "AAA" not in {ref.ticker for ref in reports.instrument_refs}
+
+
+def test_listings_found_by_more_scans_rank_first():
+    session = FakeSession()
+    session.scans[scan_key("STK", "STK.US.MAJOR", "TOP_PERC_GAIN")] = [
+        ScannerRow(0, 6, "THIN", "NYSE", "USD"), ScannerRow(1, 1, "AAA", "NASDAQ", "USD")]
+    session.scans[scan_key("STOCK.EU", "STK.EU.IBIS", "MOST_ACTIVE")] = [
+        ScannerRow(0, 3, "SAP", "IBIS", "EUR"), ScannerRow(1, 6, "THIN", "NYSE", "USD")]
+    order = [item.conid for item in acquire_universe(session, PLAN, now=AS_OF).listings]
+    assert order[:2] == [6, 1]  # THIN in 3 scans, AAA in 2, then single-scan listings by rank
+
+
+def test_default_plan_v2_leads_with_opportunity_scans():
+    codes = [q.scan_code for q in DEFAULT_PLAN.queries if q.location == "STK.US.MAJOR"]
+    assert codes[:2] == ["HIGH_VS_52W_HL", "HIGH_VS_13W_HL"] and DEFAULT_PLAN.version == "2"
+    assert len(DEFAULT_PLAN.queries) == 30
