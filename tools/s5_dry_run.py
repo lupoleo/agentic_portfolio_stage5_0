@@ -40,6 +40,7 @@ from app.e2e.stage5_dry_run import (
     market_inputs,
     resolve_contract,
 )
+from app.e2e.stage5_order_instruction import build_request, describe, write_request
 from app.e2e.stage5_portfolio import RISK_HISTORY_DURATION, directory_from_version, positions_from_version
 from app.scanner.ibkr_universe import ScannerReports
 from app.scanner.research_integration_store import ScannerResearchIntegrationStore
@@ -82,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--funding", choices=["base", "trading"], default="base",
                         help="fund the trade from the account base-currency cash (IBKR converts; default) or, "
                              "as 4.0/Fineco did, only from cash in the trading currency")
-    parser.add_argument("--entry-type", default="MARKET")
+    parser.add_argument("--entry-type", choices=["LIMIT", "MARKET"], default="LIMIT",
+                        help="LIMIT (default) at --entry-price, by default the reference close")
     parser.add_argument("--entry-price", type=float)
     parser.add_argument("--target-1", type=float)
     parser.add_argument("--target-2", type=float)
@@ -136,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
             market_observed_at=market.market_observed_at,
             instrument_id=instrument.instrument_id,
             entry_type=args.entry_type,
-            entry_price=args.entry_price,
+            entry_price=(args.entry_price or (args.reference_price or market.reference_price))
+            if args.entry_type == "LIMIT" else args.entry_price,
             target_1=args.target_1,
             target_2=args.target_2,
             input_source=INPUT_SOURCE,
@@ -171,8 +174,18 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(session, "close"):
             session.close()
 
+    instruction = None
+    if run.status is DryRunStatus.COMPLETED and run.execution_plan_id:
+        plan = stage3.get_execution_plan(run.execution_plan_id)
+        cash = {b.currency: b.cash_balance for b in version.reading.balances if b.currency != "BASE"}
+        instruction = build_request(plan, dry_run_id=run.run_id, version_id=version.version_id,
+                                    state_origin=version.origin.value, cash_available=cash,
+                                    rehearsal=bool(part_a.get("rehearsal")), now=datetime.now(timezone.utc))
+        instruction_path = write_request(instruction, args.output_directory / "order_instructions")
+
     report = {
         "audit_id": "E2E-S5.0-7B",
+        "order_instruction_request": instruction.model_dump(mode="json") if instruction else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "part_a_report": str(report_path),
         "account_state_version": version.version_id,
@@ -213,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
     print("portfolio_mutations:", run.portfolio_mutations)
     print("automatic_executions:", run.automatic_executions)
     print("report:", path)
+    if instruction is not None:
+        for line in describe(instruction):
+            print(line)
+        print("order_instruction_request_file:", instruction_path)
+        print("order_instructions_created: 0 (the assistant creates it in IBKR; you approve it there)")
     if run.status is DryRunStatus.COMPLETED:
         print("S5_DRY_RUN: PASS")
         return 0

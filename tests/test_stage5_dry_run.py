@@ -222,3 +222,48 @@ def test_trading_currency_funding_keeps_the_4_0_rule(tmp_path, capsys):
     code = dry_run(tmp_path, capsys, "--exposure-eur", "300", "--funding", "trading")
     out = capsys.readouterr().out  # the synthetic account holds no USD cash
     assert code == 1 and "POSITION_SIZING: FAILED" in out and "below one unit" in out
+
+
+def test_completed_dry_run_writes_one_order_instruction_request(tmp_path, capsys):
+    from app.e2e.stage5_order_instruction import load_request
+    from tools import s5_record_instruction
+
+    code = dry_run(tmp_path, capsys, "--exposure-eur", "300")
+    out = capsys.readouterr().out
+    assert code == 0, out
+    (path,) = (tmp_path / "out" / "order_instructions").glob("oir-*.json")
+    request = load_request(path)
+    a = request.arguments
+    assert a.contract_id_ex == "1003" and a.side == "BUY" and a.order_type == "LIMIT" and a.time_in_force == "DAY"
+    assert a.quantity >= 1 and a.limit_price == pytest.approx(193.25)
+    assert request.protective_stop is not None and request.protective_stop < a.limit_price
+    assert request.simulated_state and request.requires_holder_confirmation and not request.rehearsal
+    assert request.status == "PENDING_CREATION", request.blocked_reason
+    assert "order_instructions_created: 0" in out and "broker_orders_submitted: 0" in out
+
+    assert s5_record_instruction.main([str(path), "--instruction-id", "I-1", "--deep-link", "https://ibkr.example/i/1"]) == 0
+    assert load_request(path).status == "CREATED" and load_request(path).instruction_id == "I-1"
+    assert s5_record_instruction.main([str(path), "--instruction-id", "I-2", "--deep-link", "https://x"]) == 2
+
+
+def test_order_instruction_guards():
+    from app.cio.models import Currency, ExecutionPlan, ExecutionSide
+    from app.e2e.stage5_order_instruction import build_request
+
+    plan = ExecutionPlan(
+        execution_plan_id="EXEC-1", created_at=NOW, opportunity_id="opp", proposal_id="p", simulation_id="s",
+        decision_id="d", snapshot_id="snap", broker="IBKR", underlying="UCG.MI", instrument_id="IBKR:262695149",
+        currency=Currency.EUR, direction=Direction.LONG, execution_side=ExecutionSide.BUY, quantity=6,
+        order_type="LIMIT", reference_price=81.3, entry_price=81.3, stop_price=76.43, fx_to_eur=1.0,
+        gross_exposure_eur=487.8)
+    common = dict(dry_run_id="r", version_id="v", now=NOW)
+    ok = build_request(plan, state_origin="REAL_IBKR", cash_available={"EUR": 2000.0}, rehearsal=False, **common)
+    assert ok.status == "PENDING_CREATION" and not ok.requires_holder_confirmation
+    assert ok.arguments.model_dump() == {"contract_id_ex": "262695149", "side": "BUY", "quantity": 6,
+                                         "order_type": "LIMIT", "limit_price": 81.3, "time_in_force": "DAY"}
+    poor = build_request(plan, state_origin="REAL_IBKR", cash_available={"EUR": 100.0}, rehearsal=False, **common)
+    assert poor.status == "BLOCKED" and "exceeds the real IBKR cash" in poor.blocked_reason
+    rehearsal = build_request(plan, state_origin="REAL_IBKR", cash_available={"EUR": 2000.0}, rehearsal=True, **common)
+    assert rehearsal.status == "BLOCKED" and "REHEARSAL" in rehearsal.blocked_reason
+    assert ok.request_id == build_request(plan, state_origin="REAL_IBKR", cash_available={"EUR": 2000.0},
+                                          rehearsal=False, **common).request_id
