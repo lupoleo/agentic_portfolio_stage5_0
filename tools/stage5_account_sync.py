@@ -22,10 +22,28 @@ from app.broker.sync_store import SyncStore
 
 
 def _print(r) -> None:
-    m = r.version.reading.metrics
+    reading = r.version.reading
+    m = reading.metrics
     print(f"{r.observed_at:%Y-%m-%d %H:%M} {r.outcome.value:<14} {r.version.version_id}  "
-          f"positions={len(r.version.reading.positions)} NLV={m.net_liquidation:,.2f} {m.base_currency}")
+          f"positions={len(reading.positions)} NLV={m.net_liquidation:,.2f} {m.base_currency}")
+    print(f"  cash {m.total_cash_value or 0:,.2f}  positions value {m.gross_position_value or 0:,.2f}  "
+          f"available {m.available_funds or 0:,.2f}  init margin {m.initial_margin or 0:,.2f} {m.base_currency}")
+    for b in reading.balances:
+        if b.currency != "BASE":
+            print(f"  cash {b.currency}: {b.cash_balance:,.2f}")
+    for p in reading.positions:
+        side = "SHORT" if p.quantity < 0 else "LONG "
+        print(f"  {side} {p.symbol:<8} qty {p.quantity:>8g}  avg {p.average_price or 0:>10,.2f}  "
+              f"last {p.market_price or 0:>10,.2f}  value {p.market_value or 0:>11,.2f} {p.currency}  "
+              f"P&L {p.unrealized_pnl or 0:>9,.2f}")
+    for o in reading.open_orders:
+        price = o.get("stop_price") or o.get("limit_price") or ""
+        print(f"  order {o.get('side')} {o.get('quantity')} {o.get('symbol')} {o.get('order_type')} {price} "
+              f"{o.get('time_in_force')} [{o.get('status')}]")
     for c in r.changes:
+        if c.change_type.value == "INITIAL":
+            print("  first sync: this version is the baseline for change detection")
+            continue
         print(f"    {c.change_type.value:<22} {c.subject:<18} {c.before} -> {c.after}")
 
 
