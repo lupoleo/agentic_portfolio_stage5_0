@@ -223,3 +223,17 @@ def test_default_plan_v2_leads_with_opportunity_scans():
     codes = [q.scan_code for q in DEFAULT_PLAN.queries if q.location == "STK.US.MAJOR"]
     assert codes[:2] == ["HIGH_VS_52W_HL", "HIGH_VS_13W_HL"] and DEFAULT_PLAN.version == "2"
     assert len(DEFAULT_PLAN.queries) == 30
+
+
+def test_balanced_regions_alternate_us_and_european_candidates():
+    from app.scanner.ibkr_universe import UniverseListing, interleave_regions
+
+    def eu(conid, n):
+        return UniverseListing(conid, f"E{conid}", "BVME", "EUR", 0, tuple(f"STK.EU.BVME:S{i}" for i in range(n)))
+
+    def us(conid, n):
+        return UniverseListing(conid, f"U{conid}", "NASDAQ", "USD", 0, tuple(f"STK.US.MAJOR:S{i}" for i in range(n)))
+
+    ranked = [eu(1, 4), eu(2, 4), eu(3, 3), us(10, 2), eu(4, 2), us(11, 1)]
+    assert [x.conid for x in interleave_regions(ranked)] == [10, 1, 11, 2, 3, 4]
+    assert [x.conid for x in interleave_regions([eu(1, 1), eu(2, 1)])] == [1, 2]
