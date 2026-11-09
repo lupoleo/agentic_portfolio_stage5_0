@@ -3,7 +3,7 @@
 The 4.0 research pipeline passes only a ticker to evidence providers. The
 directory supplies the IBKR identity (conid, ISIN, held exchange, asset kind,
 other listings) that the IBKR providers need, built from the account state of
-the run (live positions or the TEMPORARY simulation) and, later, screener rows.
+the run (live IBKR positions) and screener rows.
 Unknown tickers stay unknown: providers then return NO_DATA instead of
 searching by ticker.
 """
@@ -15,7 +15,6 @@ from collections.abc import Iterable
 from pydantic import Field
 
 from .models import AccountReading, BrokerModel
-from .sources import SimulationFixture
 
 
 class InstrumentRef(BrokerModel):
@@ -62,10 +61,4 @@ class InstrumentDirectory:
         return cls(
             InstrumentRef(ticker=p.symbol, conid=p.conid, isin=p.isin, asset_kind=p.asset_class, currency=p.currency)
             for p in reading.positions
-        )
-
-    @classmethod
-    def from_fixture(cls, fixture: SimulationFixture) -> "InstrumentDirectory":
-        return cls(
-            InstrumentRef(ticker=h.symbol, conid=h.conid, isin=h.isin, currency=h.currency) for h in fixture.holdings
         )

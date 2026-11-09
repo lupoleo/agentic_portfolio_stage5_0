@@ -15,10 +15,10 @@ class BrokerModel(BaseModel):
 class PortfolioMode(str, Enum):
     """Which account state the run works on.
 
-    ``LIVE`` is the default and the only production mode.
-    ``SIMULATED_FINECO_USD`` is a TEMPORARY test mode: real IBKR cash and
-    account data, with the positions replaced by Paolo's Fineco USD stocks
-    while their transfer to IBKR is pending.
+    ``LIVE`` is the only mode. ``SIMULATED_FINECO_USD`` (and the
+    ``SIMULATED_TEMPORARY`` origin) belonged to the Fineco-USD simulation
+    removed on 2026-11-09; they remain only so that versions persisted before
+    then can still be read. No code produces them any more.
     """
 
     LIVE = "LIVE"

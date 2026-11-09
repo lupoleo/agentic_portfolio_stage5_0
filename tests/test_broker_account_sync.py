@@ -17,10 +17,6 @@ from app.broker.ibkr_client import (
 from app.broker.models import ChangeType, PortfolioMode, StateOrigin, SyncOutcome
 from app.broker.sources import (
     LiveIbkrAccountSource,
-    SimulatedFinecoUsdSource,
-    SimulationError,
-    SimulationExpiredError,
-    SimulationFixture,
 )
 from app.broker.sync_store import SyncStore
 from app.cio.models import DataSource
@@ -201,105 +197,7 @@ def test_store_is_append_only(tmp_path):
             con.execute(sql)
 
 
-# --- TEMPORARY simulation -----------------------------------------------------------------
-
-
-def fixture(valid_until=date(2027, 3, 31)):
-    return SimulationFixture(
-        fixture_id="test-sim",
-        purpose="test",
-        valid_until=valid_until,
-        source_file="synthetic",
-        source_file_sha256="0" * 64,
-        source_exported_on=date(2026, 11, 6),
-        holdings=[
-            {"conid": 501, "symbol": "SIM1", "isin": "US0000000001", "description": "SIM ONE", "listing_exchange": "NASDAQ", "currency": "USD", "quantity": 10, "average_price": 90.0, "market_price_at_export": 100.0},
-            {"conid": 502, "symbol": "SIM2", "isin": "US0000000002", "description": "SIM TWO", "listing_exchange": "NYSE", "currency": "USD", "quantity": 20, "average_price": 60.0, "market_price_at_export": 50.0},
-        ],
-    )
-
-
-def sim_service(tmp_path, *readings, fx=None, price_lookup=None, store=None):
-    client = ReadOnlyIbkrClient(transport_for(*readings))
-    store = store or SyncStore(tmp_path / "sync.db")
-    source = SimulatedFinecoUsdSource(client, fx or fixture(), price_lookup=price_lookup, clock=Clock())
-    return AccountSyncService(source, store), store
-
-
-def test_simulation_uses_real_cash_and_simulated_positions(tmp_path):
-    empty = reading(positions=[], summ=summary(nlv=8_000, cash=8_000, gross=0, margin=0))
-    service, store = sim_service(tmp_path, empty)
-    result = service.sync()
-    v = result.version
-    assert v.mode is PortfolioMode.SIMULATED_FINECO_USD
-    assert v.origin is StateOrigin.SIMULATED_TEMPORARY
-    assert [p.conid for p in v.reading.positions] == [501, 502]
-    assert all(p.origin is StateOrigin.SIMULATED_TEMPORARY for p in v.reading.positions)
-    simulated_eur = (10 * 100 + 20 * 50) * 0.9
-    assert v.reading.metrics.net_liquidation == pytest.approx(8_000 + simulated_eur)
-    assert v.reading.metrics.gross_position_value == pytest.approx(simulated_eur)
-    assert {b.currency: b.cash_balance for b in v.reading.balances}["USD"] == 3_000  # real cash untouched
-    assert "SIMULATION" in v.reading.source_detail
-
-
-def test_simulation_never_shares_the_live_lineage(tmp_path):
-    store = SyncStore(tmp_path / "sync.db")
-    live, _, _ = live_service(tmp_path, reading())
-    live.sync()
-    live_version = store.latest_version(PortfolioMode.LIVE)
-    sim, _ = sim_service(tmp_path, reading(positions=[]), store=store)
-    sim_result = sim.sync()
-    assert sim_result.outcome is SyncOutcome.INITIAL
-    assert sim_result.version.parent_version_id is None
-    assert store.latest_version(PortfolioMode.LIVE) == live_version
-
-
-def test_simulation_keeps_other_real_positions(tmp_path):
-    service, _ = sim_service(tmp_path, reading(positions=[position(conid=9009, symbol="REAL")]))
-    v = service.sync().version
-    origins = {p.conid: p.origin for p in v.reading.positions}
-    assert origins == {501: StateOrigin.SIMULATED_TEMPORARY, 502: StateOrigin.SIMULATED_TEMPORARY, 9009: StateOrigin.REAL_IBKR}
-
-
-def test_simulation_refuses_when_the_transfer_has_arrived(tmp_path):
-    service, _ = sim_service(tmp_path, reading(positions=[position(conid=501, symbol="SIM1")]))
-    with pytest.raises(SimulationError, match="transfer has arrived"):
-        service.sync()
-
-
-def test_simulation_expires(tmp_path):
-    service, store = sim_service(tmp_path, reading(positions=[]), fx=fixture(valid_until=date(2026, 11, 5)))
-    with pytest.raises(SimulationExpiredError):
-        service.sync()
-    assert store.latest_version(PortfolioMode.SIMULATED_FINECO_USD) is None
-
-
-def test_simulation_does_not_invent_an_exchange_rate(tmp_path):
-    no_usd = {"balances": [{"currency": "BASE", "cash_balance": 5_000, "exchange_rate": 1}, {"currency": "EUR", "cash_balance": 5_000, "exchange_rate": 1}]}
-    service, _ = sim_service(tmp_path, reading(positions=[], bal=no_usd))
-    with pytest.raises(SimulationError, match="exchange rate"):
-        service.sync()
-
-
-def test_simulation_prefers_live_prices_when_available(tmp_path):
-    service, _ = sim_service(tmp_path, reading(positions=[]), price_lookup=lambda conid: 110.0 if conid == 501 else None)
-    prices = {p.conid: p.market_price for p in service.sync().version.reading.positions}
-    assert prices == {501: 110.0, 502: 50.0}
-
-
 # --- CIO contract bridge -------------------------------------------------------------------
-
-
-def test_cio_adapter_marks_simulated_state(tmp_path):
-    service, _ = sim_service(tmp_path, reading(positions=[]))
-    version = service.sync().version
-    state = account_state_from_version(version)
-    assert state.source is DataSource.IBKR_SIMULATED
-    assert state.account_equity_eur == pytest.approx(version.reading.metrics.net_liquidation)
-    assert {c.currency.value: c.available for c in state.cash} == {"EUR": 5_000, "USD": 3_000}
-    ref, digest = snapshot_source_reference(version)
-    assert ref == f"ibkr://SIMULATED_FINECO_USD/{version.version_id}"
-    assert digest == version.structural_fingerprint
 
 
 def test_cio_adapter_marks_real_state(tmp_path):

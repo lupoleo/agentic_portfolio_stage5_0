@@ -5,13 +5,14 @@
 | Field | Value |
 | --- | --- |
 | Role | Design proposal for the Stage 5.0 major release. Review before any code is written |
-| Status | APPROVED by Paolo 2026-11-06 — revision 4; revision 5 requested by Paolo 2026-11-09; implementation in progress (§8) |
+| Status | APPROVED by Paolo 2026-11-06 — revision 4; revisions 5 and 6 requested by Paolo 2026-11-09; implementation in progress (§8) |
 | Date | 2026-11-04 |
 | Revision 1 | Live IBKR portfolio: no file import of any kind; versioned snapshots on every broker-side change; change-driven, minimal re-computation (§5A). Supersedes the original draft where they differ |
 | Revision 2 | No persisted instrument catalog: tradable instruments are discovered live from IBKR per stock and filtered by the account profile (trading permissions, IBKR entity and country, flow type). New Account Profile and Instrument Availability components (§5B). Instrument-reference, proxy and symbol-mapping modules retired |
 | Revision 3 | TEMPORARY simulated portfolio for tests and E2E while the Fineco → IBKR transfer of the US stocks is pending (§5C). Architecture approved |
 | Revision 4 | Evidence source strategy approved by Paolo 2026-11-06 after a coverage check on all 26 Fineco holdings: IBKR primary, IB Gateway news for daily headlines, Yahoo kept as a declared secondary source for analysts and fundamentals; ISIN-keyed contract resolution (§5D). Closes decision 1 (G1) and revises G3 |
 | Revision 5 | Requested by Paolo 2026-11-09: the E2E ends with an **IBKR order instruction awaiting the account holder's approval** instead of a manual plan only. The approved ExecutionPlan becomes one deterministic `OrderInstructionRequest`; the assistant creates it through the IBKR connector (`create_order_instruction`, flow `REVIEW_AND_APPROVE`), which marks it as AI-generated and keeps it non-live until Paolo submits it in IBKR (§4.4). Supersedes "Stage 5.0 does not create IBKR order instructions" |
+| Revision 6 | Requested by Paolo 2026-11-09: the TEMPORARY simulated portfolio (§5C) is **removed**. The account and the portfolio are always read live from Paolo's real IBKR account through IB Gateway (Read-Only API): account values, cash per currency, positions with contract details, open orders (§5A.1a). Supersedes revision 3 |
 | Source baseline | `lupoleo/agentic_portfolio_stage4_0` at `afca47d` (AI-8C.2-R5 merged), `STAGE_4_0_ARCHITECTURE.md` |
 | Project form | New standalone repository and folder (`agentic_portfolio_stage5_0`), not a branch of 4.0 |
 | Product | Aleph Innovation product portfolio |
@@ -200,9 +201,11 @@ flowchart LR
 
 Guards: one instruction per ExecutionPlan (idempotent on the request
 fingerprint); never from a `REHEARSAL` opportunity; never under an
-`AUTONOMOUS` flow; on the TEMPORARY simulated portfolio (§5C) only after the
-holder's explicit confirmation for that instruction, because sizing then uses a
-simulated NLV; the quantity must be affordable with the real cash per currency.
+`AUTONOMOUS` flow (IB Gateway cannot see the connector flow type, so the
+assistant reads `get_flow_type` live before creating the instruction); the
+quantity must be affordable with the real cash per currency. Since revision 6
+every state is real IBKR state; a request built on a legacy simulated version
+would still require the holder's explicit confirmation.
 
 ---
 
@@ -328,6 +331,28 @@ that change actually invalidates.
 | `broker/sync_store.py` | Append-only tables: `account_sync_run`, `portfolio_snapshot`, `account_state`, `state_change` (diff), `recompute_job` |
 | `e2e/recompute_planner.py` | Maps each change type to the minimal set of invalidated artifacts and enqueues recompute jobs (§5A.4) |
 | `e2e/stage5_runtime.py` | Executes jobs through the existing services, binding each result to the new snapshot ID |
+
+### 5A.1a Live read through IB Gateway (revision 6)
+
+The production account source is `gateway_account_source` (`app/broker/sources.py`):
+`LiveIbkrAccountSource` on a `GatewayAccountTransport` that answers the
+connector-shaped account tools from one IB Gateway read per sync
+(`IbAsyncGatewaySession.account_snapshot`, ib_async `readonly=True`, Gateway
+"Read-Only API"):
+
+| Connector shape | IB Gateway source |
+| --- | --- |
+| `get_account_summary` | `accountValues`: NetLiquidation, EquityWithLoanValue, TotalCashValue, GrossPositionValue, AvailableFunds, BuyingPower, Init/MaintMarginReq, ExcessLiquidity, Leverage-S (base currency) |
+| `get_account_balances` | `accountValues`: CashBalance and ExchangeRate per currency |
+| `get_account_positions` | `portfolio` (quantity, price, value, average cost, unrealized P&L) + `reqContractDetails` (ISIN, long name, primary exchange, ETF) |
+| `get_account_orders` | `reqAllOpenOrders` / `openTrades` (viewing only; nothing is modified) |
+| `get_flow_type` | not visible via Gateway (`NOT_VISIBLE_VIA_GATEWAY`); checked live by the assistant before an order instruction (§4.4) |
+
+The Gateway must expose exactly one managed account. Readings are
+`PortfolioMode.LIVE`, origin `REAL_IBKR`, source `ib-gateway:read-only-api`.
+`--recording` replays recorded connector responses in tests and offline runs;
+`tools.s5_record_gateway_fixtures` records the account snapshot with the
+market data for offline development.
 
 ### 5A.2 When the sync runs
 
@@ -480,27 +505,14 @@ flowchart LR
 Research and scoring stay at the underlying level, as in 4.0. Instruments
 appear only from Instrument Selection onward.
 
-## 5C. TEMPORARY simulated portfolio (new in revision 3)
+## 5C. TEMPORARY simulated portfolio (revision 3) — REMOVED in revision 6
 
-The transfer of Paolo's US stocks from FinecoBank to IBKR is delayed, so the
-real IBKR account currently holds cash only. Until the transfer completes, tests
-and the final E2E runs use a **simulation**: the 12 USD-quoted stocks of the
-Fineco export of 2026-11-06 are treated as if they were already IBKR positions.
-
-| Rule | Implementation |
-| --- | --- |
-| Production code reads and persists only the real account | `LiveIbkrAccountSource` is the default mode (`PortfolioMode.LIVE`) |
-| The simulation is explicit and separate | `SimulatedFinecoUsdSource`, mode `SIMULATED_FINECO_USD`, origin `SIMULATED_TEMPORARY` on every reading and position; its versions form their own lineage and never become parents of real versions |
-| No Excel at runtime | The export was converted once into a reviewed JSON fixture (`data/simulation/fineco_usd_2026-11-06.json`, git-ignored personal data) with the IBKR conid of each stock and the SHA-256 of the source file |
-| Real IBKR data stays real | Cash per currency, FX rates, margin, flow type and any real position come from IBKR; net liquidation and gross position value add the simulated holdings at the IBKR USD rate |
-| Prices | Live IBKR price when a price lookup is supplied, otherwise the export price |
-| Self-ending | The fixture expires (`valid_until` 2027-03-31, renewable only by editing it); if any simulated stock appears as a real IBKR position the simulation refuses to run ("transfer has arrived") |
-| Downstream marking | The CIO bridge stamps `AccountState.source = IBKR_SIMULATED`; an ExecutionPlan built on simulated state must stay a non-authorized dry run |
-
-Simulated holdings (conids resolved read-only with `search_contracts`):
-TSLA 76792991, AMZN 3691937, MSFT 272093, NVDA 4815747, SPCX 890493863,
-NBIS 88819736, META 107113386, GOOGL 208813719, PLTR 444857009, MSTR 272110
-(NASDAQ); PFE 11031, DELL 346218218 (NYSE).
+Revision 3 added a simulation of the 12 USD-quoted Fineco stocks while the
+Fineco → IBKR transfer was pending. Paolo removed it on 2026-11-09: the
+`SimulatedFinecoUsdSource`, its fixture and every `--mode`/`--fixture` option
+are gone, and tests use synthetic connector-shaped readings of a real account.
+`PortfolioMode.SIMULATED_FINECO_USD` and `StateOrigin.SIMULATED_TEMPORARY`
+remain only so that versions persisted before revision 6 can still be read.
 
 ---
 
@@ -591,7 +603,7 @@ Each step closes with tests and a short checkpoint document, as in 4.0.
    modules and their tests; offline regression green with 4.0 fixtures.
 2. **S5.0-1 IBKR client spike (G5).** Read-only allowlisted client, auth,
    rate limits, response recording for fixtures.
-3. **S5.0-2 Live account sync — FIRST BLOCK DONE 2026-11-06** (sync, versions, diff, simulation; see `docs/S5.0-2-ACCOUNT-SYNC.md`). Remaining: run preflight wiring, scheduled polling, portfolio analysis on IBKR history. Scope: `AccountSyncService`, versioned
+3. **S5.0-2 Live account sync — FIRST BLOCK DONE 2026-11-06** (sync, versions, diff; the revision 3 simulation was removed in revision 6; see `docs/S5.0-2-ACCOUNT-SYNC.md`). Remaining: run preflight wiring, scheduled polling, portfolio analysis on IBKR history. Scope: `AccountSyncService`, versioned
    PortfolioSnapshot/AccountState, diff and change types, run preflight,
    scheduled polling; portfolio analysis on IBKR history.
 4. **S5.0-2a Account Profile and instrument availability (§5B, G11).**
@@ -621,6 +633,8 @@ Each step closes with tests and a short checkpoint document, as in 4.0.
 11. **S5.0-7C Order instruction (revision 5, §4.4).** `OrderInstructionRequest`
    builder, guards, recording tool; the E2E closes with an IBKR instruction
    awaiting Paolo's approval.
+12. **S5.0-8 Real account only (revision 6).** Simulation removed; account
+   and portfolio read live through IB Gateway Read-Only API (§5A.1a).
 
 ---
 

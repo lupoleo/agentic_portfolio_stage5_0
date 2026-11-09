@@ -7,9 +7,9 @@ and ANTHROPIC_API_KEY set:
 
 Steps, all read-only:
 
-1. account state: the latest reading of the account recording (real IBKR cash
-   and metrics) with the TEMPORARY simulated holdings, valued at the latest
-   IB Gateway close, versioned in the Stage 5 sync store;
+1. account state: the real IBKR account (summary, cash per currency,
+   positions, open orders) read live through IB Gateway, versioned in the
+   Stage 5 sync store;
 2. portfolio analysis on IB Gateway history (4.0 quant engines unchanged):
    AccountState, PortfolioSnapshot and PortfolioRiskState bound to the
    ``ibkr://`` state version;
@@ -32,9 +32,7 @@ from pathlib import Path
 
 from app.broker.account_sync import AccountSyncService
 from app.broker.gateway import IbAsyncGatewaySession, RecordedGatewaySession
-from app.broker.ibkr_client import ReadOnlyIbkrClient
-from app.broker.recordings import ACCOUNT_TOOLS, RecordedTransport
-from app.broker.sources import LiveIbkrAccountSource, SimulatedFinecoUsdSource, SimulationFixture
+from app.broker.sources import gateway_account_source
 from app.broker.sync_store import SyncStore
 from app.e2e.stage4_contracts import Stage4E2ERequest, Stage4Mode
 from app.e2e.stage4_runtime import CanonicalStage4Runtime, Stage4RuntimeConfiguration
@@ -55,22 +53,6 @@ EMPTY_SCANNER_REPORTS = {
                      "mappings": [], "mapping_count": 0},
     "history.json": {"audit_id": "E2E-S2.2D-HISTORY-PILOT", "results": []},
 }
-
-
-def latest_reading_transport(path: Path) -> tuple[RecordedTransport, datetime]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    last = data["readings"][-1]
-    return RecordedTransport({tool: [last[tool]] for tool in ACCOUNT_TOOLS}), datetime.fromisoformat(last["observed_at"])
-
-
-def latest_close(session):
-    def lookup(conid: int) -> float | None:
-        try:
-            return session.daily_history(conid, "SMART", duration="1 W")[-1].close
-        except Exception:  # noqa: BLE001 - fall back to the fixture export price
-            return None
-
-    return lookup
 
 
 def write_scanner_placeholders(directory: Path) -> dict[str, str]:
@@ -115,9 +97,6 @@ def run_scanner(session, version, output: Path, *, as_of, max_listings, max_cand
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--mode", choices=["simulated", "live"], default="simulated")
-    parser.add_argument("--account-recording", type=Path, default=Path("data/recordings/ibkr_account_2026-11.json"))
-    parser.add_argument("--fixture", type=Path, default=Path("data/simulation/fineco_usd_2026-11-06.json"))
     parser.add_argument("--gateway-recording", type=Path, help="replay a Gateway recording instead of the live Gateway")
     parser.add_argument("--port", type=int, default=4001)
     parser.add_argument("--db", type=Path, default=Path("data/state/stage5_cio.db"))
@@ -146,14 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     session = RecordedGatewaySession(str(args.gateway_recording)) if args.gateway_recording \
         else IbAsyncGatewaySession(port=args.port)
     try:
-        transport, observed_at = latest_reading_transport(args.account_recording)
-        client = ReadOnlyIbkrClient(transport)
-        if args.mode == "simulated":
-            source = SimulatedFinecoUsdSource(client, SimulationFixture.load(args.fixture),
-                                              price_lookup=latest_close(session), clock=lambda: observed_at)
-        else:
-            source = LiveIbkrAccountSource(client, clock=lambda: observed_at)
-        sync = AccountSyncService(source, SyncStore(args.sync_db)).sync()
+        sync = AccountSyncService(gateway_account_source(session, clock=lambda: now), SyncStore(args.sync_db)).sync()
         version = sync.version
         print(f"account: {version.version_id} {sync.outcome.value} positions={len(version.reading.positions)} "
               f"origin={version.origin.value}")

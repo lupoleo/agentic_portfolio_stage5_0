@@ -1,36 +1,30 @@
-"""Account sources: the live IBKR account and the TEMPORARY simulation.
+"""Account sources: the live IBKR account.
 
-Production uses ``LiveIbkrAccountSource`` only. ``SimulatedFinecoUsdSource``
-exists while Paolo's US stocks are being transferred from Fineco to IBKR: it
-reads the real IBKR cash, account metrics and profile, and replaces the
-(empty) position list with the Fineco USD stocks of a reviewed JSON fixture.
-Real IBKR positions, if any, are kept; if one of them is a simulated stock
-the transfer has arrived and the simulation refuses to run. Every reading it produces is marked ``SIMULATED_TEMPORARY`` and is stored in a
-separate lineage, so it can never be mistaken for, or chained to, real state.
+``LiveIbkrAccountSource`` reads the account through a read-only
+``ReadOnlyIbkrClient``. In production the transport is
+``GatewayAccountTransport``: the account summary, cash per currency,
+positions and open orders read live from IB Gateway (Read-Only API). A
+recorded transport replays the same responses in tests and offline runs.
+
+The TEMPORARY Fineco-USD simulation (revision 3) was removed on 2026-11-09
+(revision 6): every reading is real IBKR state.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
-from datetime import date, datetime, timezone
-from pathlib import Path
-from typing import Protocol
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
+from typing import Any, Protocol
 
-from pydantic import Field
-
-from .ibkr_client import ReadOnlyIbkrClient
-from .models import (
-    AccountMetrics,
-    AccountReading,
-    BrokerModel,
-    BrokerPosition,
-    PortfolioMode,
-    StateOrigin,
-)
+from .ibkr_client import BrokerClientError, ReadOnlyIbkrClient
+from .models import AccountReading, PortfolioMode, StateOrigin
 from .normalize import balances_from_ibkr, metrics_from_ibkr, position_from_ibkr, profile_from
 
 Clock = Callable[[], datetime]
+
+# IB Gateway cannot see the connector's order-instruction flow; the assistant
+# checks ``get_flow_type`` live before creating an instruction (§4.4).
+GATEWAY_FLOW_TYPE = "NOT_VISIBLE_VIA_GATEWAY"
 
 
 def utc_now() -> datetime:
@@ -44,12 +38,36 @@ class AccountSource(Protocol):
         ...
 
 
+class GatewayAccountTransport:
+    """``IbkrToolTransport`` answering the account tools from one IB Gateway
+    account snapshot (read once, on the first call)."""
+
+    def __init__(self, session) -> None:
+        self._session = session
+        self._snapshot: dict[str, Any] | None = None
+
+    @property
+    def notes(self) -> list[str]:
+        return list((self._snapshot or {}).get("notes") or [])
+
+    def call(self, tool: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        if tool == "get_flow_type":
+            return {"flow_type": GATEWAY_FLOW_TYPE}
+        if self._snapshot is None:
+            self._snapshot = self._session.account_snapshot()
+        if tool not in self._snapshot:
+            raise BrokerClientError(f"IB Gateway account snapshot has no {tool}")
+        return self._snapshot[tool]
+
+
 class LiveIbkrAccountSource:
     mode = PortfolioMode.LIVE
 
-    def __init__(self, client: ReadOnlyIbkrClient, clock: Clock = utc_now) -> None:
+    def __init__(self, client: ReadOnlyIbkrClient, clock: Clock = utc_now,
+                 source_detail: str = "ibkr-connector:live") -> None:
         self._client = client
         self._clock = clock
+        self._detail = source_detail
 
     def read(self) -> AccountReading:
         observed_at = self._clock()
@@ -67,139 +85,12 @@ class LiveIbkrAccountSource:
             metrics=metrics,
             profile=profile_from(metrics, balances, flow_type),
             open_orders=orders,
-            source_detail="ibkr-connector:live",
+            source_detail=self._detail,
         )
 
 
-# --- TEMPORARY simulation ---------------------------------------------------------------
+def gateway_account_source(session, clock: Clock = utc_now) -> LiveIbkrAccountSource:
+    """The production account source: live IBKR account through IB Gateway."""
 
-
-class SimulationError(RuntimeError):
-    pass
-
-
-class SimulationExpiredError(SimulationError):
-    pass
-
-
-class SimulatedHolding(BrokerModel):
-    conid: int = Field(gt=0)
-    symbol: str
-    isin: str
-    description: str
-    listing_exchange: str
-    currency: str = Field(min_length=3, max_length=3)
-    quantity: float = Field(gt=0)
-    average_price: float = Field(gt=0)
-    market_price_at_export: float = Field(gt=0)
-
-
-class SimulationFixture(BrokerModel):
-    fixture_id: str
-    purpose: str
-    valid_until: date
-    source_file: str
-    source_file_sha256: str = Field(min_length=64, max_length=64)
-    source_exported_on: date
-    holdings: tuple[SimulatedHolding, ...] = Field(min_length=1)
-
-    @classmethod
-    def load(cls, path: str | Path) -> "SimulationFixture":
-        return cls.model_validate(json.loads(Path(path).read_text(encoding="utf-8")))
-
-
-PriceLookup = Callable[[int], float | None]
-
-
-class SimulatedFinecoUsdSource:
-    """Real IBKR cash/metrics/profile + simulated positions (TEMPORARY)."""
-
-    mode = PortfolioMode.SIMULATED_FINECO_USD
-
-    def __init__(
-        self,
-        client: ReadOnlyIbkrClient,
-        fixture: SimulationFixture,
-        *,
-        price_lookup: PriceLookup | None = None,
-        clock: Clock = utc_now,
-    ) -> None:
-        self._client = client
-        self._fixture = fixture
-        self._price_lookup = price_lookup
-        self._clock = clock
-
-    def read(self) -> AccountReading:
-        observed_at = self._clock()
-        if observed_at.date() > self._fixture.valid_until:
-            raise SimulationExpiredError(
-                f"simulation {self._fixture.fixture_id} expired on {self._fixture.valid_until}; "
-                "switch to LIVE mode or renew the fixture explicitly"
-            )
-
-        real_metrics = metrics_from_ibkr(self._client.account_summary())
-        balances = balances_from_ibkr(self._client.account_balances())
-        flow_type = self._client.flow_type()
-        real_positions = [position_from_ibkr(p) for p in self._client.account_positions()]
-        overlap = {p.conid for p in real_positions} & {h.conid for h in self._fixture.holdings}
-        if overlap:
-            raise SimulationError(
-                f"conids {sorted(overlap)} are now real IBKR positions: the transfer has arrived, "
-                "switch to LIVE mode instead of simulating them"
-            )
-
-        rates = {b.currency: b.exchange_rate_to_base for b in balances}
-        positions: list[BrokerPosition] = list(real_positions)
-        simulated_value_base = 0.0
-        for h in self._fixture.holdings:
-            price = self._price_lookup(h.conid) if self._price_lookup else None
-            if price is None:
-                price = h.market_price_at_export
-            value = price * h.quantity
-            rate = 1.0 if h.currency == real_metrics.base_currency else rates.get(h.currency)
-            if rate is None:
-                raise SimulationError(f"no IBKR exchange rate for {h.currency}; cannot value the simulation")
-            simulated_value_base += value * rate
-            positions.append(
-                BrokerPosition(
-                    conid=h.conid,
-                    symbol=h.symbol,
-                    description=h.description,
-                    asset_class="STK",
-                    currency=h.currency,
-                    quantity=h.quantity,
-                    average_price=h.average_price,
-                    market_price=price,
-                    market_value=value,
-                    unrealized_pnl=(price - h.average_price) * h.quantity,
-                    isin=h.isin,
-                    origin=StateOrigin.SIMULATED_TEMPORARY,
-                )
-            )
-
-        nlv = real_metrics.net_liquidation + simulated_value_base
-        gross = (real_metrics.gross_position_value or 0.0) + simulated_value_base
-        metrics = AccountMetrics(
-            **{
-                **real_metrics.model_dump(),
-                "net_liquidation": nlv,
-                "gross_position_value": gross,
-                "leverage": gross / nlv if nlv > 0 else None,
-            }
-        )
-        detail = (
-            f"SIMULATION {self._fixture.fixture_id} (temporary, valid until {self._fixture.valid_until}); "
-            f"real IBKR cash, metrics and {len(real_positions)} real position(s) + "
-            f"{len(self._fixture.holdings)} simulated holding(s)"
-        )
-        return AccountReading(
-            observed_at=observed_at,
-            mode=self.mode,
-            origin=StateOrigin.SIMULATED_TEMPORARY,
-            positions=tuple(sorted(positions, key=lambda p: p.conid)),
-            balances=balances,
-            metrics=metrics,
-            profile=profile_from(real_metrics, balances, flow_type),
-            open_orders=tuple(self._client.account_orders()),
-            source_detail=detail,
-        )
+    return LiveIbkrAccountSource(ReadOnlyIbkrClient(GatewayAccountTransport(session)), clock=clock,
+                                 source_detail="ib-gateway:read-only-api")
