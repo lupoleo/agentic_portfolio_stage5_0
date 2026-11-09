@@ -298,6 +298,7 @@ def build_canonical_portfolio_filter_service(
     store: Stage3Store,
     *,
     candidate_symbol_resolver: Callable[[TradeOpportunity], str] | None = None,
+    input_provider: Callable[[TradeOpportunity, PortfolioSnapshot], PortfolioMarginalRiskInputs] | None = None,
 ) -> PortfolioFilterService:
     """
     Production composition root for PF-1C.
@@ -309,7 +310,8 @@ def build_canonical_portfolio_filter_service(
     risk engine is wired to the canonical Fineco/Yahoo input provider.
     """
 
-    provider = CanonicalPortfolioMarginalRiskInputProvider(
+    # Stage 5 injects the IBKR provider (account state version + IB Gateway history).
+    provider = input_provider or CanonicalPortfolioMarginalRiskInputProvider(
         candidate_symbol_resolver=candidate_symbol_resolver,
     )
 

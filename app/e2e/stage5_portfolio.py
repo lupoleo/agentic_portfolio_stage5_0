@@ -30,7 +30,7 @@ from app.broker.cio_adapter import account_state_from_version, snapshot_source_r
 from app.broker.gateway import GatewaySession
 from app.broker.instrument_directory import InstrumentDirectory, InstrumentRef
 from app.broker.models import StateVersion
-from app.cio.models import PortfolioRiskStateRecord, PortfolioSnapshot
+from app.cio.models import PortfolioRiskStateRecord, PortfolioSnapshot, RiskConstraints
 from app.cio.storage import Stage3Store
 from app.portfolio.models import PortfolioPosition
 
@@ -141,14 +141,17 @@ def analyze_account_version(
     *,
     db_path: str,
     now: datetime | None = None,
+    constraints: RiskConstraints | None = None,
 ) -> Stage5PortfolioAnalysis:
+    """``constraints``: PF-1 limits for the AccountState (Stage 5: fractions of
+    the live NLV, see ``app.e2e.stage5_dry_run.NlvRiskPolicy``)."""
     now = now or datetime.now(timezone.utc)
     positions = positions_from_version(version)
     if not positions:
         raise Stage5PortfolioError("the account state has no stock/ETF position to analyze")
 
     store = Stage3Store(db_path)
-    account_state = account_state_from_version(version)
+    account_state = account_state_from_version(version, constraints)
     if store.get_account_state(account_state.account_state_id) is None:
         store.save_account_state(account_state)
 
