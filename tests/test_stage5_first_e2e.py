@@ -152,3 +152,24 @@ def test_scanner_candidates_join_the_watch_universe(tmp_path, capsys):
     assert report["configuration"]["max_hypotheses"] == 10
     for counter in ("broker_orders_submitted", "portfolio_mutations", "automatic_executions"):
         assert f"{counter}: 0" in out
+
+
+def test_saved_scanner_reports_are_reused_without_a_new_scan(tmp_path, capsys):
+    test_scanner_candidates_join_the_watch_universe(tmp_path, capsys)  # first run: scans and saves reports
+    saved = tmp_path / "out" / "scanner"
+    gateway = tmp_path / "gateway.json"
+    data = json.loads(gateway.read_text(encoding="utf-8"))
+    data.pop("scans")  # a second scan would find nothing: the candidate must come from the saved reports
+    gateway.write_text(json.dumps(data), encoding="utf-8")
+    code = s5_first_e2e.main([
+        "--gateway-recording", str(gateway), "--account-recording", str(tmp_path / "account.json"),
+        "--fixture", str(tmp_path / "fixture.json"), "--db", str(tmp_path / "cio2.db"),
+        "--sync-db", str(tmp_path / "sync2.db"), "--output-directory", str(tmp_path / "out2"),
+        "--cache-only", "--reuse-scanner", str(saved),
+    ])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert f"scanner: REUSED {saved}" in out and "candidates=['NEWC']" in out
+    (watch_path,) = (tmp_path / "out2" / "watch_universe").glob("*.json")
+    members = json.loads(watch_path.read_text(encoding="utf-8"))["universe"]["members"]
+    assert {m["yahoo_symbols"][0] for m in members} == {"AAA", "BBB", "CCC", "NEWC"}

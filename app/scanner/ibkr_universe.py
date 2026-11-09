@@ -267,6 +267,26 @@ class ScannerReports:
     instrument_refs: list[InstrumentRef]
     summary: dict = field(default_factory=dict)
 
+    @classmethod
+    def load(cls, directory) -> "ScannerReports":
+        """Reports persisted by ``write``: reused to rerun the pipeline without a new scan."""
+        from pathlib import Path
+
+        directory = Path(directory)
+
+        def read(name):
+            return json.loads((directory / name).read_text(encoding="utf-8"))
+
+        eligibility, mapping, history = read("eligibility.json"), read("mapping.json"), read("history.json")
+        summary = read("summary.json") if (directory / "summary.json").exists() else {}
+        currency = {(r["exchange"], r["symbol"]): r.get("currency") for r in eligibility["all_decisions"]}
+        refs = [
+            InstrumentRef(ticker=row["candidate_symbols"][0], conid=row["ibkr_conid"], exchange="SMART",
+                          asset_kind="STK", currency=currency.get((row["exchange"], row["symbol"])))
+            for row in mapping["mappings"] if row.get("ibkr_conid") and row.get("candidate_symbols")
+        ]
+        return cls(eligibility, mapping, history, refs, summary)
+
     def write(self, directory) -> dict[str, str]:
         from pathlib import Path
 
