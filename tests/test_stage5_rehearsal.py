@@ -66,6 +66,7 @@ def test_rehearsal_promotes_in_the_copy_and_reaches_an_execution_plan(tmp_path, 
     with sqlite3.connect(tmp_path / "rehearsal" / "cio.db") as c:
         (notes,) = c.execute("SELECT payload_json FROM trade_opportunities").fetchone()
     assert "REHEARSAL" in notes
+    assert "status=BLOCKED" in out and "BLOCKED: REHEARSAL opportunity" in out  # never an IBKR instruction
 
 
 def test_rehearsal_reports_when_nothing_was_scored(tmp_path, capsys):
