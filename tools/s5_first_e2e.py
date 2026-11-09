@@ -17,8 +17,8 @@ Steps, all read-only:
    details and daily bars, gated by the 4.0 eligibility and history-quality
    rules (``--no-scanner`` keeps the holdings-only universe);
 4. the 4.0 E2E service with IBKR evidence channels and Claude: watch universe
-   (holdings + scanner candidates), research and opportunity scoring. The run stops at operator selection; the dry run on an IBKR
-   snapshot is part B.
+   (holdings + scanner candidates), research and opportunity scoring. The run stops at operator selection;
+   ``python -m tools.s5_dry_run`` (part B) then dry-runs the selected opportunity on the same IBKR snapshot.
 
 No order, alert or watchlist is ever created; the side-effect counters stay 0.
 """
@@ -40,6 +40,7 @@ from app.e2e.stage4_contracts import Stage4E2ERequest, Stage4Mode
 from app.e2e.stage4_runtime import CanonicalStage4Runtime, Stage4RuntimeConfiguration
 from app.e2e.stage4_service import Stage4E2EService
 from app.e2e.stage4_store import Stage4E2EStore
+from app.e2e.stage5_dry_run import NlvRiskPolicy
 from app.e2e.stage5_portfolio import analyze_account_version, directory_from_version
 from app.scanner.ibkr_universe import DEFAULT_PLAN, ScannerReports, acquire_universe, build_scanner_reports
 
@@ -157,7 +158,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"account: {version.version_id} {sync.outcome.value} positions={len(version.reading.positions)} "
               f"origin={version.origin.value}")
 
-        analysis = analyze_account_version(version, session, db_path=str(args.db), now=now)
+        nlv = version.reading.metrics.net_liquidation
+        constraints = NlvRiskPolicy().constraints(nlv)
+        print(f"pf1: NLV {nlv:.2f} EUR -> max trade loss {constraints.max_trade_loss_eur} EUR, "
+              f"max position weight {constraints.max_position_weight_pct}%")
+        analysis = analyze_account_version(version, session, db_path=str(args.db), now=now, constraints=constraints)
         print(f"portfolio: snapshot={analysis.snapshot.snapshot_id} risk={analysis.risk_state.risk_state_id} "
               f"analyzed={len(analysis.analyzed_positions)}/{len(analysis.positions)}")
         for symbol, reason in sorted(analysis.history_failures.items()):

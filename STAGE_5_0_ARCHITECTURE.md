@@ -574,8 +574,7 @@ Each step closes with tests and a short checkpoint document, as in 4.0.
    and fundamentals (§5D).
 2. **Universe (G2):** IBKR screener-only universe, or keep EODHD just for
    listing discovery?
-3. **PF-1 limits (G7):** express them as fractions of live NLV so they
-   follow the account automatically?
+3. ~~**PF-1 limits (G7)**~~ — **decided 2026-11-09:** fractions of the live NLV (`app/e2e/stage5_dry_run.py::NlvRiskPolicy`): max trade loss 1.5%, max position weight 20%, max gross exposure 150%, max 25% of deployable cash per trade, VaR 95% 1d max 3%, cash reserve 5%. The limits are part of the AccountState identity. The dry run (S5.0-7B, `tools/s5_dry_run.py`) funds foreign-currency trades from base-currency cash by default (IBKR converts); `--funding trading` keeps the 4.0 rule.
 4. **Polling (G10):** is a 15-minute interval during market hours, plus a
    sync before every run, acceptable?
 5. **Cloud LLM (G8):** confirm that public evidence may be sent to Claude while

@@ -26,10 +26,12 @@ def build_canonical_portfolio_simulation_service(
     store: Stage3Store,
     *,
     candidate_symbol_resolver: Callable[[TradeProposal], str] | None = None,
+    input_provider: Callable | None = None,
 ) -> PortfolioSimulationService:
-    """Production composition root for Portfolio Simulator V2."""
+    """Production composition root for Portfolio Simulator V2. Stage 5 injects
+    the IBKR marginal-risk ``input_provider``."""
 
-    provider = CanonicalPortfolioMarginalRiskInputProvider(
+    provider = input_provider or CanonicalPortfolioMarginalRiskInputProvider(
         candidate_symbol_resolver=candidate_symbol_resolver,
     )
 
