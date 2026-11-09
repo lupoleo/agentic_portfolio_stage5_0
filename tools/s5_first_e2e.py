@@ -87,7 +87,7 @@ def run_scanner(session, version, output: Path, *, as_of, max_listings, max_cand
     for scan in failed:
         print(f"  scan {scan.query.location} {scan.query.scan_code}: {scan.error}")
     reports = build_scanner_reports(session, acquisition, as_of=as_of, max_listings=max_listings,
-                                    max_candidates=max_candidates, require_uptrend=require_uptrend, exclude_conids=held, progress=lambda line: print("  " + line))
+                                    max_candidates=max_candidates, require_uptrend=require_uptrend, balance_regions=True, exclude_conids=held, progress=lambda line: print("  " + line))
     paths = reports.write(output)
     print("scanner_counts:", reports.summary["counts"])
     if reports.summary["fx_errors"]:

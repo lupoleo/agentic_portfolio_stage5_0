@@ -178,6 +178,30 @@ def acquire_universe(session: GatewaySession, plan: ScanPlan = DEFAULT_PLAN, *,
     return UniverseAcquisition(plan, acquired_at, tuple(outcomes), tuple(listings))
 
 
+def listing_region(item: UniverseListing) -> str:
+    """US or EUROPE, from the scanner locations that returned the listing."""
+
+    return "US" if any(src.startswith("STK.US") for src in item.sources) else "EUROPE"
+
+
+def interleave_regions(listings: Sequence[UniverseListing]) -> list[UniverseListing]:
+    """US and European listings alternated, each keeping its own confluence order.
+
+    Five European venues against one US location otherwise fill the
+    candidate budget with European names on every run."""
+
+    groups: dict[str, list[UniverseListing]] = {}
+    for item in listings:
+        groups.setdefault(listing_region(item), []).append(item)
+    order = [r for r in ("US", "EUROPE") if r in groups]
+    out: list[UniverseListing] = []
+    index = 0
+    while any(index < len(groups[r]) for r in order):
+        out.extend(groups[r][index] for r in order if index < len(groups[r]))
+        index += 1
+    return out
+
+
 def research_symbol(symbol: str, exchange: str) -> str:
     symbol = symbol.strip().upper().replace(" ", "-")
     if exchange in US_EXCHANGES:
@@ -324,6 +348,7 @@ def build_scanner_reports(
     max_listings: int | None = None,
     max_candidates: int | None = None,
     require_uptrend: bool = False,
+    balance_regions: bool = False,
     exclude_conids: frozenset[int] = frozenset(),
     calendar_factory: CalendarFactory | None = None,
     progress: Callable[[str], None] | None = None,
@@ -337,6 +362,8 @@ def build_scanner_reports(
     history route, so research spends its budget on the best-ranked names;
     listings on a venue without a session calendar (e.g. FWB secondary
     listings) are skipped before any history call;
+    ``balance_regions`` alternates US and European listings (each in
+    confluence order) so neither region fills the candidate budget alone;
     ``exclude_conids`` skips instruments already held (they are watched as
     positions, not admitted as new candidates).
     """
@@ -345,6 +372,8 @@ def build_scanner_reports(
     calendar_factory = calendar_factory or default_calendar_factory()
     start = as_of.date() - timedelta(days=history_days)
     selected = [item for item in acquisition.listings if item.conid not in exclude_conids]
+    if balance_regions:
+        selected = interleave_regions(selected)
     if max_listings is not None:
         selected = selected[:max_listings]
 
